@@ -1,7 +1,4 @@
-Here is a `README.md` file for the program:
-
-```markdown
-# Go Web Server with Rate Limiting and CSRF Protection
+# Identoro User Signup Server for sqlite or Postgres.
 
 This is a Go web server that supports user signup, signin, password reset, and account verification functionalities. It uses PostgreSQL (via `pgx` driver) or SQLite for data storage and includes rate limiting for login attempts per account.
 
@@ -123,6 +120,4 @@ WHERE id = NEW.id;
 ## License
 
 This project is licensed under the MIT License.
-```
 
-You can customize the repository URL, email addresses, and any other details specific to your project. This `README.md` provides an overview of the features, installation instructions, usage, configuration options, rate limiting, graceful shutdown, and an example SQL script for PostgreSQL.
