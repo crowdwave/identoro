@@ -31,6 +31,7 @@ var (
     store             *sessions.CookieStore
     tmpl              = template.Must(template.ParseGlob("templates/*.html"))
     config            *Config
+    version           = "1.0.0"
 )
 
 type Config struct {
@@ -73,6 +74,36 @@ func loadConfig() (*Config, error) {
     return config, nil
 }
 
+func printConfig(config *Config) {
+    fmt.Println("Server Version:", version)
+    fmt.Println("Available Environment Variables:")
+    fmt.Println("  SECRET_KEY          : Secret key for session cookies")
+    fmt.Println("  EMAIL_SENDER        : Email address used for sending emails")
+    fmt.Println("  EMAIL_PASSWORD      : Password for the email sender")
+    fmt.Println("  SMTP_HOST           : SMTP server host")
+    fmt.Println("  SMTP_PORT           : SMTP server port")
+    fmt.Println("  DB_NAME             : Database name")
+    fmt.Println("  WEB_SERVER_ADDRESS  : Address of the web server")
+    fmt.Println("  EMAIL_REPLY_TO      : Reply-to email address")
+    fmt.Println("  RECAPTCHA_SITE_KEY  : Site key for Google reCAPTCHA")
+    fmt.Println("  RECAPTCHA_SECRET_KEY: Secret key for Google reCAPTCHA")
+
+    fmt.Println("\nSet Environment Variables:")
+    fmt.Printf("  SECRET_KEY          : %s\n", config.SecretKey)
+    fmt.Printf("  EMAIL_SENDER        : %s\n", config.EmailSender)
+    fmt.Println("  EMAIL_PASSWORD      : ********")
+    fmt.Printf("  SMTP_HOST           : %s\n", config.SmtpHost)
+    fmt.Printf("  SMTP_PORT           : %d\n", config.SmtpPort)
+    fmt.Printf("  DB_NAME             : %s\n", config.DbName)
+    fmt.Printf("  WEB_SERVER_ADDRESS  : %s\n", config.WebServerAddress)
+    fmt.Printf("  EMAIL_REPLY_TO      : %s\n", config.EmailReplyTo)
+    fmt.Printf("  RECAPTCHA_SITE_KEY  : %s\n", config.RecaptchaSiteKey)
+    fmt.Println("  RECAPTCHA_SECRET_KEY: ********")
+
+    fmt.Println("\nCommand Line Options:")
+    fmt.Println("  -create-db          : Create the database")
+}
+
 func main() {
     var err error
     config, err = loadConfig()
@@ -90,6 +121,8 @@ func main() {
 
     createDB := flag.Bool("create-db", false, "Create the database")
     flag.Parse()
+
+    printConfig(config)
 
     if *createDB {
         if flag.NFlag() != 1 {
