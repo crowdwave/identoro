@@ -16,6 +16,7 @@ import (
     "os/signal"
     "regexp"
     "strconv"
+    "sync"
     "syscall"
     "time"
 
@@ -23,7 +24,6 @@ import (
     "github.com/gorilla/sessions"
     "github.com/jackc/pgx/v4/pgxpool"
     "github.com/joho/godotenv"
-    _ "github.com/lib/pq"          // PostgreSQL driver
     _ "github.com/mattn/go-sqlite3" // SQLite driver
     "github.com/unrolled/secure"
     "golang.org/x/crypto/bcrypt"
@@ -31,12 +31,16 @@ import (
 )
 
 var (
-    db     Database
-    store  *sessions.CookieStore
-    tmpl   = template.Must(template.ParseGlob("templates/*.html"))
-    config *Config
-    version = "1.0.0"
-    dbAvailable = false
+    db                     Database
+    store                  *sessions.CookieStore
+    tmpl                   = template.Must(template.ParseGlob("templates/*.html"))
+    config                 *Config
+    version                = "1.0.0"
+    dbAvailable            = false
+    loginMaxPerHour        = 15
+    loginLock              sync.Mutex
+    loginAttemptsByAccount = make(map[string]int)
+    currentEpochHour       int64
 )
 
 type Config struct {
@@ -465,6 +469,26 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
             }
             return
         }
+
+        // Rate limiting by account (username)
+        epochHour := time.Now().Unix() / 3600
+        loginLock.Lock()
+        if currentEpochHour != epochHour {
+            loginAttemptsByAccount = make(map[string]int)
+            currentEpochHour = epochHour
+        }
+        attempts := loginAttemptsByAccount[username]
+        if attempts >= loginMaxPerHour {
+            loginLock.Unlock()
+            if r.Header.Get("Content-Type") == "application/json") {
+                jsonResponse(w, http.StatusTooManyRequests, "Too many login attempts", nil)
+            } else {
+                errorResponse(w, http.StatusTooManyRequests, "Too many login attempts")
+            }
+            return
+        }
+        loginAttemptsByAccount[username]++
+        loginLock.Unlock()
 
         user, err := db.GetUserByUsername(username)
         if err != nil {
