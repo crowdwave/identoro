@@ -4,46 +4,45 @@ import (
     "crypto/rand"
     "database/sql"
     "encoding/hex"
+    "encoding/json"
     "flag"
     "fmt"
+    "html/template"
+    "io/ioutil"
     "log"
-    "net"
     "net/http"
     "os"
     "regexp"
     "strconv"
     "time"
 
+    "github.com/gomail/gomail"
     "github.com/gorilla/csrf"
     "github.com/gorilla/sessions"
-    "github.com/gomail/gomail"
     "github.com/joho/godotenv"
     _ "github.com/mattn/go-sqlite3"
-    "golang.org/x/crypto/bcrypt"
-    "html/template"
-    "io/ioutil"
-    "encoding/json"
     "github.com/unrolled/secure"
+    "golang.org/x/crypto/bcrypt"
 )
 
 var (
-    db                *sql.DB
-    store             *sessions.CookieStore
-    tmpl              = template.Must(template.ParseGlob("templates/*.html"))
-    config            *Config
-    version           = "1.0.0"
+    db     *sql.DB
+    store  *sessions.CookieStore
+    tmpl   = template.Must(template.ParseGlob("templates/*.html"))
+    config *Config
+    version = "1.0.0"
 )
 
 type Config struct {
-    SecretKey         string
-    EmailSender       string
-    EmailPassword     string
-    SmtpHost          string
-    SmtpPort          int
-    DbName            string
-    WebServerAddress  string
-    EmailReplyTo      string
-    RecaptchaSiteKey  string
+    SecretKey          string
+    EmailSender        string
+    EmailPassword      string
+    SmtpHost           string
+    SmtpPort           int
+    DbName             string
+    WebServerAddress   string
+    EmailReplyTo       string
+    RecaptchaSiteKey   string
     RecaptchaSecretKey string
 }
 
@@ -59,15 +58,15 @@ func loadConfig() (*Config, error) {
     }
 
     config := &Config{
-        SecretKey:         os.Getenv("SECRET_KEY"),
-        EmailSender:       os.Getenv("EMAIL_SENDER"),
-        EmailPassword:     os.Getenv("EMAIL_PASSWORD"),
-        SmtpHost:          os.Getenv("SMTP_HOST"),
-        SmtpPort:          smtpPort,
-        DbName:            os.Getenv("DB_NAME"),
-        WebServerAddress:  os.Getenv("WEB_SERVER_ADDRESS"),
-        EmailReplyTo:      os.Getenv("EMAIL_REPLY_TO"),
-        RecaptchaSiteKey:  os.Getenv("RECAPTCHA_SITE_KEY"),
+        SecretKey:          os.Getenv("SECRET_KEY"),
+        EmailSender:        os.Getenv("EMAIL_SENDER"),
+        EmailPassword:      os.Getenv("EMAIL_PASSWORD"),
+        SmtpHost:           os.Getenv("SMTP_HOST"),
+        SmtpPort:           smtpPort,
+        DbName:             os.Getenv("DB_NAME"),
+        WebServerAddress:   os.Getenv("WEB_SERVER_ADDRESS"),
+        EmailReplyTo:       os.Getenv("EMAIL_REPLY_TO"),
+        RecaptchaSiteKey:   os.Getenv("RECAPTCHA_SITE_KEY"),
         RecaptchaSecretKey: os.Getenv("RECAPTCHA_SECRET_KEY"),
     }
 
@@ -217,9 +216,18 @@ func errorResponse(w http.ResponseWriter, statusCode int, message string) {
 
 func homeHandler(w http.ResponseWriter, r *http.Request) {
     session, _ := store.Get(r, "session")
+    username, ok := session.Values["username"].(string)
     tmpl.ExecuteTemplate(w, "home.html", map[string]interface{}{
-        "Username": session.Values["username"],
-        "RecaptchaSiteKey": config.RecaptchaSiteKey,
+        "Username": username,
+        "SignedIn": ok,
+        "Endpoints": []string{
+            "/signup",
+            "/signin",
+            "/signout",
+            "/forgot",
+            "/reset",
+            "/verify",
+        },
     })
 }
 
