@@ -1,5 +1,3 @@
-package main
-
 import (
     "crypto/rand"
     "database/sql"
@@ -14,82 +12,79 @@ import (
     "strconv"
     "time"
 
+    "github.com/gorilla/csrf"
     "github.com/gorilla/sessions"
     "github.com/gomail/gomail"
     "github.com/joho/godotenv"
     _ "github.com/mattn/go-sqlite3"
     "golang.org/x/crypto/bcrypt"
     "html/template"
+    "io/ioutil"
+    "encoding/json"
 )
 
 var (
     db                *sql.DB
     store             *sessions.CookieStore
     tmpl              = template.Must(template.ParseGlob("templates/*.html"))
-    emailSender       string
-    emailPassword     string
-    smtpHost          string
-    smtpPort          int
-    dbName            string
-    webServerAddress  string
-    emailReplyTo      string
+    config            *Config
 )
 
-func init() {
+type Config struct {
+    SecretKey         string
+    EmailSender       string
+    EmailPassword     string
+    SmtpHost          string
+    SmtpPort          int
+    DbName            string
+    WebServerAddress  string
+    EmailReplyTo      string
+    RecaptchaSiteKey  string
+    RecaptchaSecretKey string
+}
+
+func loadConfig() (*Config, error) {
     err := godotenv.Load()
     if err != nil {
-        log.Fatal("Error loading .env file")
+        return nil, fmt.Errorf("error loading .env file: %v", err)
     }
 
-    dbName = os.Getenv("DB_NAME")
-    if dbName == "" {
-        log.Fatal("DB_NAME is not set in .env file")
-    }
-
-    secretKey := os.Getenv("SECRET_KEY")
-    if secretKey == "" {
-        log.Fatal("SECRET_KEY is not set in .env file")
-    }
-
-    emailSender = os.Getenv("EMAIL_SENDER")
-    if emailSender == "" {
-        log.Fatal("EMAIL_SENDER is not set in .env file")
-    }
-
-    emailPassword = os.Getenv("EMAIL_PASSWORD")
-    if emailPassword == "" {
-        log.Fatal("EMAIL_PASSWORD is not set in .env file")
-    }
-
-    smtpHost = os.Getenv("SMTP_HOST")
-    if smtpHost == "" {
-        log.Fatal("SMTP_HOST is not set in .env file")
-    }
-
-    smtpPortStr := os.Getenv("SMTP_PORT")
-    if smtpPortStr == "" {
-        log.Fatal("SMTP_PORT is not set in .env file")
-    }
-
-    smtpPort, err = strconv.Atoi(smtpPortStr)
+    smtpPort, err := strconv.Atoi(os.Getenv("SMTP_PORT"))
     if err != nil {
-        log.Fatal("Invalid SMTP_PORT value in .env file")
+        return nil, fmt.Errorf("invalid SMTP_PORT value in .env file")
     }
 
-    webServerAddress = os.Getenv("WEB_SERVER_ADDRESS")
-    if webServerAddress == "" {
-        log.Fatal("WEB_SERVER_ADDRESS is not set in .env file")
+    config := &Config{
+        SecretKey:         os.Getenv("SECRET_KEY"),
+        EmailSender:       os.Getenv("EMAIL_SENDER"),
+        EmailPassword:     os.Getenv("EMAIL_PASSWORD"),
+        SmtpHost:          os.Getenv("SMTP_HOST"),
+        SmtpPort:          smtpPort,
+        DbName:            os.Getenv("DB_NAME"),
+        WebServerAddress:  os.Getenv("WEB_SERVER_ADDRESS"),
+        EmailReplyTo:      os.Getenv("EMAIL_REPLY_TO"),
+        RecaptchaSiteKey:  os.Getenv("RECAPTCHA_SITE_KEY"),
+        RecaptchaSecretKey: os.Getenv("RECAPTCHA_SECRET_KEY"),
     }
 
-    emailReplyTo = os.Getenv("EMAIL_REPLY_TO")
-    if emailReplyTo == "" {
-        log.Fatal("EMAIL_REPLY_TO is not set in .env file")
-    }
-
-    store = sessions.NewCookieStore([]byte(secretKey))
+    return config, nil
 }
 
 func main() {
+    var err error
+    config, err = loadConfig()
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    store = sessions.NewCookieStore([]byte(config.SecretKey))
+    store.Options = &sessions.Options{
+        Path:     "/",
+        MaxAge:   3600 * 8, // 8 hours
+        HttpOnly: true,
+        Secure:   true, // Ensure the cookie is sent over HTTPS
+    }
+
     createDB := flag.Bool("create-db", false, "Create the database")
     flag.Parse()
 
@@ -97,29 +92,30 @@ func main() {
         if flag.NFlag() != 1 {
             log.Fatal("No other flags should be provided when using -create-db")
         }
-        createDatabase()
+        createDatabase(config.DbName)
         return
     }
 
-    var err error
-    db, err = sql.Open("sqlite3", dbName)
+    db, err = sql.Open("sqlite3", config.DbName)
     if err != nil {
         log.Fatal(err)
     }
 
-    http.Handle("/", logRequest(http.HandlerFunc(homeHandler)))
-    http.Handle("/signup", logRequest(http.HandlerFunc(signupHandler)))
-    http.Handle("/signin", logRequest(http.HandlerFunc(signinHandler)))
-    http.Handle("/signout", logRequest(http.HandlerFunc(signoutHandler)))
-    http.Handle("/forgot", logRequest(http.HandlerFunc(forgotHandler)))
-    http.Handle("/reset", logRequest(http.HandlerFunc(resetHandler)))
-    http.Handle("/verify", logRequest(http.HandlerFunc(verifyHandler)))
+    csrfMiddleware := csrf.Protect([]byte(config.SecretKey))
+
+    http.Handle("/", logRequest(csrfMiddleware(http.HandlerFunc(homeHandler))))
+    http.Handle("/signup", logRequest(csrfMiddleware(http.HandlerFunc(signupHandler))))
+    http.Handle("/signin", logRequest(csrfMiddleware(http.HandlerFunc(signinHandler))))
+    http.Handle("/signout", logRequest(csrfMiddleware(http.HandlerFunc(signoutHandler))))
+    http.Handle("/forgot", logRequest(csrfMiddleware(http.HandlerFunc(forgotHandler))))
+    http.Handle("/reset", logRequest(csrfMiddleware(http.HandlerFunc(resetHandler))))
+    http.Handle("/verify", logRequest(csrfMiddleware(http.HandlerFunc(verifyHandler))))
 
     log.Println("Server started at :8080")
     log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-func createDatabase() {
+func createDatabase(dbName string) {
     if _, err := os.Stat(dbName); err == nil {
         fmt.Printf("Database %s already exists. Overwrite? (y/n): ", dbName)
         var response string
@@ -157,18 +153,28 @@ func createDatabase() {
 
 func logRequest(handler http.Handler) http.Handler {
     return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        ip, _, err := net.SplitHostPort(r.RemoteAddr)
-        if err != nil {
-            ip = r.RemoteAddr
+        ip := r.RemoteAddr
+        if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+            ip = forwarded
         }
+
         log.Printf("%s - %s - %s %s\n", time.Now().Format(time.RFC3339), ip, r.Method, r.URL.Path)
         handler.ServeHTTP(w, r)
     })
 }
 
+func errorResponse(w http.ResponseWriter, statusCode int, message string) {
+    w.WriteHeader(statusCode)
+    w.Write([]byte(message))
+    log.Printf("Error: %s, StatusCode: %d", message, statusCode)
+}
+
 func homeHandler(w http.ResponseWriter, r *http.Request) {
     session, _ := store.Get(r, "session")
-    tmpl.ExecuteTemplate(w, "home.html", session.Values["username"])
+    tmpl.ExecuteTemplate(w, "home.html", map[string]interface{}{
+        "Username": session.Values["username"],
+        "RecaptchaSiteKey": config.RecaptchaSiteKey,
+    })
 }
 
 func signupHandler(w http.ResponseWriter, r *http.Request) {
@@ -176,9 +182,15 @@ func signupHandler(w http.ResponseWriter, r *http.Request) {
         username := r.FormValue("username")
         email := r.FormValue("email")
         password := r.FormValue("password")
+        recaptchaResponse := r.FormValue("g-recaptcha-response")
 
         if !isValidUsername(username) || !isValidEmail(email) || !isValidPassword(password) {
-            http.Error(w, "Invalid input", http.StatusBadRequest)
+            errorResponse(w, http.StatusBadRequest, "Invalid input")
+            return
+        }
+
+        if !verifyRecaptcha(recaptchaResponse) {
+            errorResponse(w, http.StatusBadRequest, "Invalid reCAPTCHA")
             return
         }
 
@@ -186,18 +198,58 @@ func signupHandler(w http.ResponseWriter, r *http.Request) {
         verificationToken := generateToken()
         _, err := db.Exec("INSERT INTO users (username, password, email, verification_token) VALUES (?, ?, ?, ?)", username, hashedPassword, email, verificationToken)
         if err != nil {
-            http.Error(w, "Username or email already exists", http.StatusBadRequest)
+            errorResponse(w, http.StatusBadRequest, "Username or email already exists")
             return
         }
 
-        verificationURL := fmt.Sprintf("%s/verify?token=%s", webServerAddress, verificationToken)
+        verificationURL := fmt.Sprintf("%s/verify?token=%s", config.WebServerAddress, verificationToken)
         emailBody := fmt.Sprintf("Please click the following link to verify your account: %s", verificationURL)
         sendEmail(email, "Verify your account", emailBody)
 
         http.Redirect(w, r, "/signin", http.StatusSeeOther)
     } else {
-        tmpl.ExecuteTemplate(w, "signup.html", nil)
+        tmpl.ExecuteTemplate(w, "signup.html", map[string]interface{}{
+            "RecaptchaSiteKey": config.RecaptchaSiteKey,
+        })
     }
+}
+
+func verifyRecaptcha(response string) bool {
+    secret := config.RecaptchaSecretKey
+    req, err := http.NewRequest("POST", "https://www.google.com/recaptcha/api/siteverify", nil)
+    if err != nil {
+        log.Println("Failed to create reCAPTCHA request:", err)
+        return false
+    }
+
+    q := req.URL.Query()
+    q.Add("secret", secret)
+    q.Add("response", response)
+    req.URL.RawQuery = q.Encode()
+
+    client := &http.Client{}
+    resp, err := client.Do(req)
+    if err != nil {
+        log.Println("Failed to verify reCAPTCHA:", err)
+        return false
+    }
+    defer resp.Body.Close()
+
+    body, err := ioutil.ReadAll(resp.Body)
+    if err != nil {
+        log.Println("Failed to read reCAPTCHA response body:", err)
+        return false
+    }
+
+    var recaptchaResponse struct {
+        Success bool `json:"success"`
+    }
+    if err := json.Unmarshal(body, &recaptchaResponse); err != nil {
+        log.Println("Failed to unmarshal reCAPTCHA response:", err)
+        return false
+    }
+
+    return recaptchaResponse.Success
 }
 
 func signinHandler(w http.ResponseWriter, r *http.Request) {
@@ -206,7 +258,7 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
         password := r.FormValue("password")
 
         if !isValidUsername(username) || !isValidPassword(password) {
-            http.Error(w, "Invalid input", http.StatusBadRequest)
+            errorResponse(w, http.StatusBadRequest, "Invalid input")
             return
         }
 
@@ -214,17 +266,17 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
         var verified bool
         err := db.QueryRow("SELECT password, verified FROM users WHERE username = ?", username).Scan(&hashedPassword, &verified)
         if err != nil {
-            http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+            errorResponse(w, http.StatusUnauthorized, "Invalid credentials")
             return
         }
 
         if !verified {
-            http.Error(w, "Account not verified", http.StatusUnauthorized)
+            errorResponse(w, http.StatusUnauthorized, "Account not verified")
             return
         }
 
         if bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(password)) != nil {
-            http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+            errorResponse(w, http.StatusUnauthorized, "Invalid credentials")
             return
         }
 
@@ -250,18 +302,18 @@ func forgotHandler(w http.ResponseWriter, r *http.Request) {
         email := r.FormValue("email")
 
         if !isValidEmail(email) {
-            http.Error(w, "Invalid email", http.StatusBadRequest)
+            errorResponse(w, http.StatusBadRequest, "Invalid email")
             return
         }
 
         resetToken := generateToken()
         _, err := db.Exec("UPDATE users SET reset_token = ? WHERE email = ?", resetToken, email)
         if err != nil {
-            http.Error(w, "Invalid email", http.StatusBadRequest)
+            errorResponse(w, http.StatusBadRequest, "Invalid email")
             return
         }
 
-        resetURL := fmt.Sprintf("%s/reset?token=%s", webServerAddress, resetToken)
+        resetURL := fmt.Sprintf("%s/reset?token=%s", config.WebServerAddress, resetToken)
         emailBody := fmt.Sprintf("Click the link to reset your password: %s", resetURL)
         sendEmail(email, "Reset your password", emailBody)
 
@@ -277,14 +329,14 @@ func resetHandler(w http.ResponseWriter, r *http.Request) {
         newPassword := r.FormValue("new_password")
 
         if !isValidPassword(newPassword) {
-            http.Error(w, "Invalid input", http.StatusBadRequest)
+            errorResponse(w, http.StatusBadRequest, "Invalid input")
             return
         }
 
         hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
         _, err := db.Exec("UPDATE users SET password = ?, reset_token = NULL WHERE reset_token = ?", hashedPassword, token)
         if err != nil {
-            http.Error(w, "Invalid token", http.StatusBadRequest)
+            errorResponse(w, http.StatusBadRequest, "Invalid token")
             return
         }
 
@@ -298,13 +350,13 @@ func verifyHandler(w http.ResponseWriter, r *http.Request) {
     token := r.URL.Query().Get("token")
     result, err := db.Exec("UPDATE users SET verified = 1, verification_token = NULL WHERE verification_token = ?", token)
     if err != nil {
-        http.Error(w, "Invalid token", http.StatusBadRequest)
+        errorResponse(w, http.StatusBadRequest, "Invalid token")
         return
     }
 
     rowsAffected, err := result.RowsAffected()
     if err != nil || rowsAffected == 0 {
-        http.Error(w, "Invalid token", http.StatusBadRequest)
+        errorResponse(w, http.StatusBadRequest, "Invalid token")
         return
     }
 
@@ -319,13 +371,13 @@ func generateToken() string {
 
 func sendEmail(to, subject, body string) {
     m := gomail.NewMessage()
-    m.SetHeader("From", emailSender)
+    m.SetHeader("From", config.EmailSender)
     m.SetHeader("To", to)
     m.SetHeader("Subject", subject)
-    m.SetHeader("Reply-To", emailReplyTo)
+    m.SetHeader("Reply-To", config.EmailReplyTo)
     m.SetBody("text/plain", body)
 
-    d := gomail.NewDialer(smtpHost, smtpPort, emailSender, emailPassword)
+    d := gomail.NewDialer(config.SmtpHost, config.SmtpPort, config.EmailSender, config.EmailPassword)
 
     if err := d.DialAndSend(m); err != nil {
         log.Fatal(err)
