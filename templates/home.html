@@ -2,15 +2,20 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Home</title>
 </head>
 <body>
-    <h1>Welcome, {{.Username}}</h1>
-    {{if .Username}}
-        <a href="/signout">Sign Out</a>
+    <h1>Welcome</h1>
+    {{if .SignedIn}}
+        <p>Hello, {{.Username}}! You are signed in.</p>
     {{else}}
-        <a href="/signin">Sign In</a> | <a href="/signup">Sign Up</a>
+        <p>You are not signed in.</p>
     {{end}}
+    <h2>Endpoints</h2>
+    <ul>
+        {{range .Endpoints}}
+            <li><a href="{{.}}">{{.}}</a></li>
+        {{end}}
+    </ul>
 </body>
 </html>
