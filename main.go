@@ -23,6 +23,7 @@ import (
     "html/template"
     "io/ioutil"
     "encoding/json"
+    "github.com/unrolled/secure"
 )
 
 var (
@@ -113,8 +114,18 @@ func main() {
     http.Handle("/reset", logRequest(csrfMiddleware(http.HandlerFunc(resetHandler))))
     http.Handle("/verify", logRequest(csrfMiddleware(http.HandlerFunc(verifyHandler))))
 
+    // Secure middleware
+    secureMiddleware := secure.New(secure.Options{
+        ContentTypeNosniff:  true,
+        XSSProtection:       "1; mode=block",
+        XFrameOptions:       "DENY",
+        ContentSecurityPolicy: "default-src 'self'",
+    })
+
+    finalHandler := secureMiddleware.Handler(http.DefaultServeMux)
+
     log.Println("Server started at :8080")
-    log.Fatal(http.ListenAndServe(":8080", nil))
+    log.Fatal(http.ListenAndServe(":8080", finalHandler))
 }
 
 func createDatabase(dbName string) {
