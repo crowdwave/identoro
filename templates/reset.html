@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reset Password</title>
+</head>
+<body>
+    <h1>Reset Password</h1>
+    <form action="/reset" method="POST">
+        <input type="hidden" name="token" value="{{.Token}}">
+        <label>New Password: <input type="password" name="new_password" required></label><br>
+        <button type="submit">Reset Password</button>
+    </form>
+    <a href="/signin">Back to Sign In</a>
+</body>
+</html>
