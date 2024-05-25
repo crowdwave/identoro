@@ -1,3 +1,5 @@
+package main
+
 import (
     "crypto/rand"
     "database/sql"
