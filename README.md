@@ -1,8 +1,8 @@
 # Identoro User Signup and Signin Server for SQLite or PostgreSQL
 
-This is single purpose web server that supports user signup, signin, password reset, and account verification functionalities. It uses PostgreSQL (via `pgx` driver) or SQLite for data storage and includes rate limiting for login attempts per account.
+This is a single-purpose web server that supports user signup, signin, password reset, and account verification functionalities. It uses PostgreSQL (via `pgx` driver) or SQLite for data storage and includes rate limiting for login attempts per account.
 
-The idea is that you don't have to build all this stuff (AGAIN), you can just get on with building your application.
+The idea is that you don't have to build all this stuff (AGAIN); you can just get on with building your application.
 
 ## Features
 
@@ -15,9 +15,9 @@ The idea is that you don't have to build all this stuff (AGAIN), you can just ge
 - Rate limiting on signin attempts
 - Rate limiting on email sends
 - Configurable via environment variables
-- Works with Postgres or sqlite
+- Works with Postgres or SQLite
 - Works with existing user tables in Postgres
-- Entire server in single binary file
+- Entire server in a single binary file
 
 ## Installation
 
@@ -82,7 +82,7 @@ The idea is that you don't have to build all this stuff (AGAIN), you can just ge
 
 ## To compile it yourself
 
-A binary is provided for 64 bit AMD64 linux but you can compile it yourself for other platforms.
+A binary is provided for 64-bit AMD64 Linux, but you can compile it yourself for other platforms.
 
 Clone the repository:
 
@@ -205,13 +205,13 @@ The server implements rate limiting to prevent abuse of the login functionality.
 
 The server handles `SIGINT` and `SIGTERM` signals for graceful shutdown, ensuring that the database connection is properly closed before the server exits.
 
-## Integration with PostgreSQL 
+## Integration with PostgreSQL
 
 ### If you are using Postgres and already have a users table.
 
 Identoro works with your existing Postgres users table via Postgres views which map our SQL queries to your table and field names. You need to create the necessary views on your Postgres server, ensuring the required fields are present and have matching column data types.
 
-The view names must be exactly as shown below and all fields must be present - your job is to put in the name of your users table and the names of the fields in your users table.
+The view names must be exactly as shown below, and all fields must be present - your job is to put in the name of your users table and the names of the fields in your users table.
 
 ### Example:
 
@@ -226,6 +226,7 @@ CREATE TABLE actual_users_table (
     is_verified BOOLEAN NOT NULL DEFAULT FALSE,
     verification_token VARCHAR(50),
     signin_count INTEGER NOT NULL DEFAULT 0,
+    unsuccessful_signins INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 ```
@@ -242,16 +243,17 @@ SELECT
     is_verified AS verified, 
     verification_token,
     signin_count,
+    unsuccessful_signins,
     created_at
 FROM actual_users_table;
 
 CREATE RULE insert_identoro_users AS
 ON INSERT TO identoro_users
-DO INSTEAD
-INSERT INTO actual_users_table (user_name, passwd, mail, verification_token, signin_count, created_at) 
-VALUES (NEW.username, NEW.password, NEW.email, NEW.verification_token
 
-, NEW.signin_count, NEW.created_at);
+
+DO INSTEAD
+INSERT INTO actual_users_table (user_name, passwd, mail, verification_token, signin_count, unsuccessful_signins, created_at) 
+VALUES (NEW.username, NEW.password, NEW.email, NEW.verification_token, NEW.signin_count, NEW.unsuccessful_signins, NEW.created_at);
 
 CREATE RULE update_identoro_users AS
 ON UPDATE TO identoro_users
@@ -264,9 +266,9 @@ SET
     is_verified = NEW.verified,
     verification_token = NEW.verification_token,
     signin_count = NEW.signin_count,
+    unsuccessful_signins = NEW.unsuccessful_signins,
     created_at = NEW.created_at
 WHERE user_id = NEW.user_id;
-
 ```
 
 ### Key Points to Ensure
@@ -289,14 +291,33 @@ CREATE TABLE identoro_users (
     is_verified BOOLEAN NOT NULL DEFAULT FALSE,
     verification_token VARCHAR(50),
     signin_count INTEGER NOT NULL DEFAULT 0,
+    unsuccessful_signins INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 ```
 
 By ensuring data type consistency and respecting constraints, your views will correctly map the columns and provide seamless integration with the Identoro server's queries.
 
+## Integration with SQLite
+
+If you are using SQLite and do not already have a users table, you can use the following SQL to create the needed users table:
+
+```sql
+-- Create the users table
+CREATE TABLE identoro_users (
+    user_id TEXT PRIMARY KEY,
+    user_name TEXT NOT NULL,
+    passwd TEXT NOT NULL,
+    mail TEXT NOT NULL,
+    is_verified INTEGER NOT NULL DEFAULT 0,
+    verification_token TEXT,
+    signin_count INTEGER NOT NULL DEFAULT 0,
+    unsuccessful_signins INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
 
 ## License
 
 This project is licensed under the MIT License.
-
+```
