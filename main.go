@@ -4,6 +4,7 @@ import (
     "context"
     "crypto/rand"
     "database/sql"
+    "encoding/base64"
     "encoding/hex"
     "encoding/json"
     "fmt"
@@ -22,6 +23,7 @@ import (
 
     "github.com/google/uuid"
     "github.com/gorilla/csrf"
+    "github.com/gorilla/securecookie"
     "github.com/gorilla/sessions"
     "github.com/jackc/pgx/v4/pgxpool"
     "github.com/joho/godotenv"
@@ -44,6 +46,8 @@ var (
     currentEpochHour       int64
     userNameOrID           string
     groupNameOrID          string
+    hashKey                = []byte("your-secret-hash-key")
+    s                      = securecookie.New(hashKey, nil)
 )
 
 type Config struct {
@@ -67,7 +71,6 @@ type User struct {
     Username          string
     Password          string
     Email             string
-    ResetToken        sql.NullString
     Verified          bool
     VerificationToken sql.NullString
 }
@@ -77,8 +80,7 @@ type Database interface {
     CreateUser(username, password, email, verificationToken string) error
     GetUserByUsername(username string) (User, error)
     UpdateUserVerification(token string) error
-    UpdateUserResetToken(email, resetToken string) error
-    UpdateUserPassword(token, hashedPassword string) error
+    UpdateUserPasswordByEmail(email, hashedPassword string) error
     TestConnection() error
 }
 
@@ -112,12 +114,12 @@ func (db *PostgresDB) CreateUser(username, password, email, verificationToken st
 
 func (db *PostgresDB) GetUserByUsername(username string) (User, error) {
     var user User
-    if (!dbAvailable) {
+    if !dbAvailable {
         return user, fmt.Errorf("database not available")
     }
-    query := `SELECT user_id, username, password, email, reset_token, verified, verification_token FROM identoro_users WHERE username = $1`
+    query := `SELECT user_id, username, password, email, verified, verification_token FROM identoro_users WHERE username = $1`
     row := db.pool.QueryRow(context.Background(), query, username)
-    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.ResetToken, &user.Verified, &user.VerificationToken)
+    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Verified, &user.VerificationToken)
     return user, err
 }
 
@@ -130,21 +132,12 @@ func (db *PostgresDB) UpdateUserVerification(token string) error {
     return err
 }
 
-func (db *PostgresDB) UpdateUserResetToken(email, resetToken string) error {
+func (db *PostgresDB) UpdateUserPasswordByEmail(email, hashedPassword string) error {
     if !dbAvailable {
         return fmt.Errorf("database not available")
     }
-    query := `UPDATE identoro_users SET reset_token = $1 WHERE email = $2`
-    _, err := db.pool.Exec(context.Background(), query, resetToken, email)
-    return err
-}
-
-func (db *PostgresDB) UpdateUserPassword(token, hashedPassword string) error {
-    if !dbAvailable {
-        return fmt.Errorf("database not available")
-    }
-    query := `UPDATE identoro_users SET password = $1, reset_token = NULL WHERE reset_token = $2`
-    _, err := db.pool.Exec(context.Background(), query, hashedPassword, token)
+    query := `UPDATE identoro_users SET password = $1 WHERE email = $2`
+    _, err := db.pool.Exec(context.Background(), query, hashedPassword, email)
     return err
 }
 
@@ -173,9 +166,9 @@ func (db *SQLiteDB) CreateUser(username, password, email, verificationToken stri
 
 func (db *SQLiteDB) GetUserByUsername(username string) (User, error) {
     var user User
-    query := `SELECT user_id, username, password, email, reset_token, verified, verification_token FROM identoro_users WHERE username = ?`
+    query := `SELECT user_id, username, password, email, verified, verification_token FROM identoro_users WHERE username = ?`
     row := db.db.QueryRow(query, username)
-    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.ResetToken, &user.Verified, &user.VerificationToken)
+    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Verified, &user.VerificationToken)
     return user, err
 }
 
@@ -185,15 +178,9 @@ func (db *SQLiteDB) UpdateUserVerification(token string) error {
     return err
 }
 
-func (db *SQLiteDB) UpdateUserResetToken(email, resetToken string) error {
-    query := `UPDATE identoro_users SET reset_token = ? WHERE email = ?`
-    _, err := db.db.Exec(query, resetToken, email)
-    return err
-}
-
-func (db *SQLiteDB) UpdateUserPassword(token, hashedPassword string) error {
-    query := `UPDATE identoro_users SET password = ?, reset_token = NULL WHERE reset_token = ?`
-    _, err := db.db.Exec(query, hashedPassword, token)
+func (db *SQLiteDB) UpdateUserPasswordByEmail(email, hashedPassword string) error {
+    query := `UPDATE identoro_users SET password = ? WHERE email = ?`
+    _, err := db.db.Exec(query, hashedPassword, email)
     return err
 }
 
@@ -437,7 +424,7 @@ func signupHandler(w http.ResponseWriter, r *http.Request) {
             return
         }
 
-        if (!verifyRecaptcha(recaptchaResponse)) {
+        if !verifyRecaptcha(recaptchaResponse) {
             if r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusBadRequest, "Invalid reCAPTCHA", nil)
             } else {
@@ -475,7 +462,7 @@ func signupHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func signinHandler(w http.ResponseWriter, r *http.Request) {
-    if (!dbAvailable) {
+    if !dbAvailable {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
@@ -566,7 +553,7 @@ func signoutHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func forgotHandler(w http.ResponseWriter, r *http.Request) {
-    if (!dbAvailable) {
+    if !dbAvailable {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
@@ -582,33 +569,24 @@ func forgotHandler(w http.ResponseWriter, r *http.Request) {
             return
         }
 
-        resetToken := generateToken()
-        err := db.UpdateUserResetToken(email, resetToken)
+        token, err := generateResetToken(email)
         if err != nil {
-            if r.Header.Get("Content-Type") == "application/json") {
-                jsonResponse(w, http.StatusBadRequest, "Invalid email", nil)
-            } else {
-                errorResponse(w, http.StatusBadRequest, "Invalid email")
-            }
+            jsonResponse(w, http.StatusInternalServerError, "Could not generate token", nil)
             return
         }
 
-        resetURL := fmt.Sprintf("%s/reset?token=%s", config.WebServerAddress, resetToken)
+        resetURL := fmt.Sprintf("%s/reset?token=%s", config.WebServerAddress, token)
         emailBody := fmt.Sprintf("Click the link to reset your password: %s", resetURL)
         sendEmail(email, "Reset your password", emailBody)
 
-        if r.Header.Get("Content-Type") == "application/json") {
-            jsonResponse(w, http.StatusSeeOther, "Password reset email sent", nil)
-        } else {
-            http.Redirect(w, r, "/signin", http.StatusSeeOther)
-        }
+        jsonResponse(w, http.StatusSeeOther, "Password reset email sent", nil)
     } else {
         tmpl.ExecuteTemplate(w, "forgot.html", nil)
     }
 }
 
 func resetHandler(w http.ResponseWriter, r *http.Request) {
-    if (!dbAvailable) {
+    if !dbAvailable {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
@@ -625,29 +603,27 @@ func resetHandler(w http.ResponseWriter, r *http.Request) {
             return
         }
 
-        hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
-        err := db.UpdateUserPassword(token, string(hashedPassword))
+        email, err := validateResetToken(token)
         if err != nil {
-            if r.Header.Get("Content-Type") == "application/json") {
-                jsonResponse(w, http.StatusBadRequest, "Invalid token", nil)
-            } else {
-                errorResponse(w, http.StatusBadRequest, "Invalid token")
-            }
+            jsonResponse(w, http.StatusUnauthorized, "Invalid token", nil)
             return
         }
 
-        if r.Header.Get("Content-Type") == "application/json") {
-            jsonResponse(w, http.StatusSeeOther, "Password reset successful", nil)
-        } else {
-            http.Redirect(w, r, "/signin", http.StatusSeeOther)
+        hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+        err = db.UpdateUserPasswordByEmail(email, string(hashedPassword))
+        if err != nil {
+            jsonResponse(w, http.StatusBadRequest, "Could not update password", nil)
+            return
         }
+
+        jsonResponse(w, http.StatusSeeOther, "Password reset successful", nil)
     } else {
         tmpl.ExecuteTemplate(w, "reset.html", nil)
     }
 }
 
 func verifyHandler(w http.ResponseWriter, r *http.Request) {
-    if (!dbAvailable) {
+    if !dbAvailable {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
@@ -669,10 +645,35 @@ func verifyHandler(w http.ResponseWriter, r *http.Request) {
     }
 }
 
-func generateToken() string {
-    token := make([]byte, 16)
-    rand.Read(token)
-    return hex.EncodeToString(token)
+func generateResetToken(email string) (string, error) {
+    value := map[string]string{
+        "email": email,
+        "exp":   fmt.Sprintf("%d", time.Now().Add(15*time.Minute).Unix()),
+    }
+    encoded, err := s.Encode("reset_token", value)
+    if err != nil {
+        return "", err
+    }
+    return base64.URLEncoding.EncodeToString([]byte(encoded)), nil
+}
+
+func validateResetToken(encodedToken string) (string, error) {
+    decoded, err := base64.URLEncoding.DecodeString(encodedToken)
+    if err != nil {
+        return "", err
+    }
+    value := make(map[string]string)
+    if err = s.Decode("reset_token", string(decoded), &value); err != nil {
+        return "", err
+    }
+    exp, err := strconv.ParseInt(value["exp"], 10, 64)
+    if err != nil {
+        return "", err
+    }
+    if time.Now().Unix() > exp {
+        return "", fmt.Errorf("token expired")
+    }
+    return value["email"], nil
 }
 
 func sendEmail(to, subject, body string) {
