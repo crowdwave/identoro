@@ -45,8 +45,8 @@ var (
     currentEpochHour       int64
     userNameOrID           string
     groupNameOrID          string
-    hashKey                = []byte("your-secret-hash-key")
-    s                      = securecookie.New(hashKey, nil)
+    hashKey                []byte
+    s                      *securecookie.SecureCookie
 )
 
 type Config struct {
@@ -217,6 +217,14 @@ func loadConfig() (*Config, error) {
     return config, nil
 }
 
+func loadHashKey() ([]byte, error) {
+    key := os.Getenv("HASH_KEY")
+    if key == "" {
+        return nil, fmt.Errorf("HASH_KEY not set in environment variables")
+    }
+    return []byte(key), nil
+}
+
 func printConfig(config *Config) {
     fmt.Println("Server Version:", version)
     fmt.Println("Configuration:")
@@ -300,6 +308,12 @@ func main() {
         log.Fatal(err)
     }
 
+    hashKey, err = loadHashKey()
+    if err != nil {
+        log.Fatal(err)
+    }
+    s = securecookie.New(hashKey, nil)
+
     userNameOrID = config.User
     groupNameOrID = config.Group
 
@@ -337,7 +351,7 @@ func main() {
         Secure:   true, // Ensure the cookie is sent over HTTPS
     }
 
-    csrfMiddleware := csrf.Protect([]byte(config.SecretKey))
+    csrfMiddleware := csrf.Protect(hashKey)
 
     http.Handle("/", logRequest(csrfMiddleware(http.HandlerFunc(homeHandler))))
     http.Handle("/signup", logRequest(csrfMiddleware(http.HandlerFunc(signupHandler))))
@@ -392,7 +406,7 @@ func logRequest(handler http.Handler) http.Handler {
 }
 
 func homeHandler(w http.ResponseWriter, r *http.Request) {
-    if !dbAvailable {
+    if (!dbAvailable) {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
