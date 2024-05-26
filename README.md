@@ -1,4 +1,6 @@
-# Identoro User Signup Server for sqlite or Postgres.
+Here is the updated documentation with separate sections for users who already have a users table and those who do not:
+
+# Identoro User Signup Server for SQLite or PostgreSQL
 
 This is a Go web server that supports user signup, signin, password reset, and account verification functionalities. It uses PostgreSQL (via `pgx` driver) or SQLite for data storage and includes rate limiting for login attempts per account.
 
@@ -97,7 +99,9 @@ The server handles `SIGINT` and `SIGTERM` signals for graceful shutdown, ensurin
 
 ## Integration with PostgreSQL 
 
-Identoro's works with your existing Postgres users table via Postgres views.  So you need to create the needed views on your Postgres server, ensuring the required fields are present and have matching column data types. 
+### If you already have a users table
+
+Identoro works with your existing Postgres users table via Postgres views which map our SQL queries to your table and field names. You need to create the necessary views on your Postgres server, ensuring the required fields are present and have matching column data types.
 
 The view names must be exactly as shown below and all fields must be present - your job is to put in the name of your users table and the names of the fields in your users table.
 
@@ -107,7 +111,7 @@ Assuming your actual `users` table (`actual_users_table`) has the following sche
 
 ```sql
 CREATE TABLE actual_users_table (
-    user_id SERIAL PRIMARY KEY,
+    user_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_name VARCHAR(50) NOT NULL,
     passwd VARCHAR(100) NOT NULL,
     mail VARCHAR(100) NOT NULL,
@@ -122,7 +126,7 @@ Your view should ensure that the columns have the same data types:
 ```sql
 CREATE VIEW identoro_users AS
 SELECT 
-    user_id AS id, 
+    user_id, 
     user_name AS username, 
     passwd AS password, 
     mail AS email, 
@@ -148,25 +152,80 @@ SET
     reset_token = NEW.reset_token,
     is_verified = NEW.verified,
     verification_token = NEW.verification_token
-WHERE user_id = NEW.id;
+WHERE user_id = NEW.user_id;
 
 CREATE RULE delete_identoro_users AS
 ON DELETE TO identoro_users
 DO INSTEAD
 DELETE FROM actual_users_table
-WHERE user_id = OLD.id;
+WHERE user_id = OLD.user_id;
 ```
 
 ### Key Points to Ensure
 
 - **Matching Data Types**: Ensure that the data types of the columns in the view match the data types of the columns in the underlying table. This is critical for insert, update, and select operations to work correctly.
-- **Matching Data Types (string data types)**: it is possible that the various Postgres string data types such as varchar and text may be compatible but this is not tested.
 - **Constraints and Defaults**: Any constraints (like `NOT NULL`, `DEFAULT`, etc.) or default values should also be considered to ensure data integrity.
 - **Indexes**: Indexes on the underlying table can help optimize the performance of queries on the view.
+
+### If you do not already have a users table
+
+If you do not have an existing users table, you can use the following SQL to create both the needed table and the views:
+
+```sql
+-- Create the users table
+CREATE TABLE actual_users_table (
+    user_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_name VARCHAR(50) NOT NULL,
+    passwd VARCHAR(100) NOT NULL,
+    mail VARCHAR(100) NOT NULL,
+    reset_token VARCHAR(50),
+    is_verified BOOLEAN NOT NULL DEFAULT FALSE,
+    verification_token VARCHAR(50)
+);
+
+-- Create the identoro_users view
+CREATE VIEW identoro_users AS
+SELECT 
+    user_id, 
+    user_name AS username, 
+    passwd AS password, 
+    mail AS email, 
+    reset_token, 
+    is_verified AS verified, 
+    verification_token 
+FROM actual_users_table;
+
+-- Create insert rule for the view
+CREATE RULE insert_identoro_users AS
+ON INSERT TO identoro_users
+DO INSTEAD
+INSERT INTO actual_users_table (user_name, passwd, mail, verification_token) 
+VALUES (NEW.username, NEW.password, NEW.email, NEW.verification_token);
+
+-- Create update rule for the view
+CREATE RULE update_identoro_users AS
+ON UPDATE TO identoro_users
+DO INSTEAD
+UPDATE actual_users_table
+SET 
+    user_name = NEW.username,
+    passwd = NEW.password,
+    mail = NEW.email,
+    reset_token = NEW.reset_token,
+    is_verified = NEW.verified,
+    verification_token = NEW.verification_token
+WHERE user_id = NEW.user_id;
+
+-- Create delete rule for the view
+CREATE RULE delete_identoro_users AS
+ON DELETE TO identoro_users
+DO INSTEAD
+DELETE FROM actual_users_table
+WHERE user_id = OLD.user_id;
+```
 
 By ensuring data type consistency and respecting constraints, your views will correctly map the columns and provide seamless integration with the Identoro server's queries.
 
 ## License
 
 This project is licensed under the MIT License.
-
