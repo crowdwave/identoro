@@ -4,9 +4,10 @@
 
 # Identoro User Signup and Signin Server for SQLite or PostgreSQL
 
+Imagine if you didn't have to build signup/signin/forgot password yet again! Run Identoro, get signup / signin flow and get on with application development.
+
 This is a single-purpose web server that supports user signup, signin, password reset, and account verification functionalities. It uses PostgreSQL (via `pgx` driver) or SQLite for data storage and includes rate limiting for login attempts per account.
 
-The idea is that you don't have to build all this stuff (AGAIN); you can just get on with building your application.
 
 ## Features
 
