@@ -5,7 +5,6 @@ import (
     "crypto/rand"
     "database/sql"
     "encoding/base64"
-    "encoding/hex"
     "encoding/json"
     "fmt"
     "html/template"
@@ -238,7 +237,7 @@ func printConfig(config *Config) {
     if config.DbType == "postgres" {
         fmt.Println("\nExample SQL for creating an updatable view for PostgreSQL:")
         fmt.Println(`CREATE VIEW identoro_users AS
-                      SELECT user_id, user_name AS username, passwd AS password, mail AS email, reset_token, is_verified AS verified, verification_token
+                      SELECT user_id, user_name AS username, passwd AS password, mail AS email, is_verified AS verified, verification_token
                       FROM actual_users_table;
 
                       CREATE RULE insert_identoro_users AS
@@ -254,10 +253,19 @@ func printConfig(config *Config) {
                       SET user_name = NEW.username,
                           passwd = NEW.password,
                           mail = NEW.email,
-                          reset_token = NEW.reset_token,
                           is_verified = NEW.verified,
                           verification_token = NEW.verification_token
                       WHERE user_id = NEW.user_id;`)
+
+        fmt.Println("\nIf you do not already have a users table, you can use the following SQL to create it:")
+        fmt.Println(`CREATE TABLE identoro_users (
+                      user_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                      user_name VARCHAR(50) NOT NULL,
+                      passwd VARCHAR(100) NOT NULL,
+                      mail VARCHAR(100) NOT NULL,
+                      is_verified BOOLEAN NOT NULL DEFAULT FALSE,
+                      verification_token VARCHAR(50)
+                  );`)
     }
 }
 
@@ -384,7 +392,7 @@ func logRequest(handler http.Handler) http.Handler {
 }
 
 func homeHandler(w http.ResponseWriter, r *http.Request) {
-    if (!dbAvailable) {
+    if !dbAvailable {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
@@ -405,7 +413,7 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func signupHandler(w http.ResponseWriter, r *http.Request) {
-    if (!dbAvailable) {
+    if !dbAvailable {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
