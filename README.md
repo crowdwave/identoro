@@ -203,7 +203,7 @@ The server handles `SIGINT` and `SIGTERM` signals
 
 ## Integration with PostgreSQL 
 
-### If you already have a users table
+### If you are using Postgres and already have a users table.
 
 Identoro works with your existing Postgres users table via Postgres views which map our SQL queries to your table and field names. You need to create the necessary views on your Postgres server, ensuring the required fields are present and have matching column data types.
 
@@ -263,9 +263,9 @@ WHERE user_id = NEW.user_id;
 - **Constraints and Defaults**: Any constraints (like `NOT NULL`, `DEFAULT`, etc.) or default values should also be considered to ensure data integrity.
 - **Indexes**: Indexes on the underlying table can help optimize the performance of queries on the view.
 
-### If you do not already have a users table
+### If you are using Postgres and do not already have a users table
 
-If you do not have an existing users table, you can use the following SQL to create both the needed users table (in this context you do not need the views):
+If you do not have an existing users table, you can use the following SQL to create the needed users table (in this context you do not need the views):
 
 ```sql
 -- Create the users table
