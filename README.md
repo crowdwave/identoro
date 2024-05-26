@@ -1,3 +1,9 @@
+No, `reset_token` is no longer stored in the database. Instead, we are using a time-expiring signed string for the password reset functionality. The documentation needs to be updated to reflect this change.
+
+Here is the corrected and updated documentation:
+
+---
+
 # Identoro User Signup Server for SQLite or PostgreSQL
 
 This is a Go web server that supports user signup, signin, password reset, and account verification functionalities. It uses PostgreSQL (via `pgx` driver) or SQLite for data storage and includes rate limiting for login attempts per account.
@@ -6,7 +12,7 @@ This is a Go web server that supports user signup, signin, password reset, and a
 
 - User Signup
 - User Signin
-- Password Reset
+- Password Reset (using time-expiring signed strings)
 - Account Verification
 - CSRF Protection
 - Rate Limiting (15 login attempts per account per hour)
@@ -18,8 +24,8 @@ This is a Go web server that supports user signup, signin, password reset, and a
 1. **Clone the repository:**
 
     ```bash
-    git clone https://github.com/your-repo/go-web-server.git
-    cd go-web-server
+    git clone https://github.com/crowdwave/identoro.git
+    cd identoro
     ```
 
 2. **Install dependencies:**
@@ -48,6 +54,8 @@ This is a Go web server that supports user signup, signin, password reset, and a
     EMAIL_REPLY_TO=your_reply_to_email
     RECAPTCHA_SITE_KEY=your_recaptcha_site_key
     RECAPTCHA_SECRET_KEY=your_recaptcha_secret_key
+    USER=your_user_name_or_id
+    GROUP=your_group_name_or_id
     ```
 
 ## To compile it yourself
@@ -63,24 +71,21 @@ cd identoro
 
 Build the server:
 
-# important! this program must be compiled with the CGO_ENABLED=0 flag set or it will not work.
-
 ```sh
 go mod tidy
-CGO_ENABLED=0 go build -o identoro identoro.go
+CGO_ENABLED=0 go build -o identoro main.go
 ```
 
 ## Usage
 
-## Why must identoro be started with sudo?
+### Why must identoro be started with sudo?
 
-On linux (not other platforms) this server must be started with sudo or as root. This is because when the server starts it puts itself in a chroot jail which means it cannot see files outside its working directory. This is why you are required to provide --user and --group on the command line so that the server can change its user and group to a non-root user after it has started.  This is a security feature to prevent the server from being able to access the entire file system.
-
+On Linux (not other platforms), this server must be started with sudo or as root. This is because when the server starts, it puts itself in a chroot jail which means it cannot see files outside its working directory. This is why you are required to provide `--user` and `--group` on the command line so that the server can change its user and group to a non-root user after it has started. This is a security feature to prevent the server from being able to access the entire file system.
 
 1. **Run the server:**
 
     ```bash
-    go run main.go
+    sudo ./identoro
     ```
 
 2. **Access the server:**
@@ -185,6 +190,8 @@ The server can be configured using the following environment variables:
 - `EMAIL_REPLY_TO` - Reply-to email address
 - `RECAPTCHA_SITE_KEY` - Site key for Google reCAPTCHA
 - `RECAPTCHA_SECRET_KEY` - Secret key for Google reCAPTCHA
+- `USER` - User name or ID to drop privileges to
+- `GROUP` - Group name or ID to drop privileges to
 
 ## Rate Limiting
 
@@ -212,7 +219,6 @@ CREATE TABLE actual_users_table (
     user_name VARCHAR(50) NOT NULL,
     passwd VARCHAR(100) NOT NULL,
     mail VARCHAR(100) NOT NULL,
-    reset_token VARCHAR(50),
     is_verified BOOLEAN NOT NULL DEFAULT FALSE,
     verification_token VARCHAR(50)
 );
@@ -227,7 +233,6 @@ SELECT
     user_name AS username, 
     passwd AS password, 
     mail AS email, 
-    reset_token, 
     is_verified AS verified, 
     verification_token 
 FROM actual_users_table;
@@ -246,7 +251,6 @@ SET
     user_name = NEW.username,
     passwd = NEW.password,
     mail = NEW.email,
-    reset_token = NEW.reset_token,
     is_verified = NEW.verified,
     verification_token = NEW.verification_token
 WHERE user_id = NEW.user_id;
@@ -261,7 +265,9 @@ WHERE user_id = NEW.user_id;
 
 ### If you do not already have a users table
 
-If you do not have an existing users table, you can use the following SQL to create both the needed users table (in this context you do not need the views):
+If you do not have an existing users table, you can use the following SQL
+
+ to create both the needed users table (in this context you do not need the views):
 
 ```sql
 -- Create the users table
@@ -270,11 +276,9 @@ CREATE TABLE identoro_users (
     user_name VARCHAR(50) NOT NULL,
     passwd VARCHAR(100) NOT NULL,
     mail VARCHAR(100) NOT NULL,
-    reset_token VARCHAR(50),
     is_verified BOOLEAN NOT NULL DEFAULT FALSE,
     verification_token VARCHAR(50)
 );
-
 ```
 
 By ensuring data type consistency and respecting constraints, your views will correctly map the columns and provide seamless integration with the Identoro server's queries.
