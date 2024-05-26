@@ -261,7 +261,7 @@ WHERE user_id = NEW.user_id;
 
 ### If you do not already have a users table
 
-If you do not have an existing users table, you can use the following SQL to create both the needed table and the views:
+If you do not have an existing users table, you can use the following SQL to create both the needed users table (in this context you do not need the views):
 
 ```sql
 -- Create the users table
@@ -274,41 +274,6 @@ CREATE TABLE actual_users_table (
     is_verified BOOLEAN NOT NULL DEFAULT FALSE,
     verification_token VARCHAR(50)
 );
-
--- Create the identoro_users view
-CREATE VIEW identoro_users AS
-SELECT 
-    user_id, 
-    user_name AS username, 
-    passwd AS password, 
-    mail AS email, 
-    reset_token, 
-    is_verified AS verified, 
-    verification_token 
-FROM actual_users_table;
-
--- Create insert rule for the view
-CREATE RULE insert_identoro_users AS
-ON INSERT TO identoro_users
-DO INSTEAD
-INSERT INTO actual_users_table (user_name, passwd, mail, verification_token) 
-VALUES (NEW.username, NEW.password, NEW.email, NEW.verification_token);
-
--- Create update rule for the view
-
-
-CREATE RULE update_identoro_users AS
-ON UPDATE TO identoro_users
-DO INSTEAD
-UPDATE actual_users_table
-SET 
-    user_name = NEW.username,
-    passwd = NEW.password,
-    mail = NEW.email,
-    reset_token = NEW.reset_token,
-    is_verified = NEW.verified,
-    verification_token = NEW.verification_token
-WHERE user_id = NEW.user_id;
 
 ```
 
