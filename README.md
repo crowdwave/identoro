@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="IDENTOROLOGO.png" alt="Logo">
+</p>
+
 # Identoro User Signup and Signin Server for SQLite or PostgreSQL
 
 This is a single-purpose web server that supports user signup, signin, password reset, and account verification functionalities. It uses PostgreSQL (via `pgx` driver) or SQLite for data storage and includes rate limiting for login attempts per account.
