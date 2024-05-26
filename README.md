@@ -281,6 +281,39 @@ CREATE TABLE identoro_users (
 
 By ensuring data type consistency and respecting constraints, your views will correctly map the columns and provide seamless integration with the Identoro server's queries.
 
+
+To turn this into a Create React App (CRA) project with TypeScript, follow these steps:
+
+1. **Install Create React App with TypeScript:**
+
+```bash
+npx create-react-app identoro-client --template typescript
+cd identoro-client
+```
+
+2. **Replace the content of `src/App.tsx` with the provided code in ui_react.tsx:**
+
+
+
+3. **Install additional dependencies:**
+
+```bash
+npm install react-router-dom @types/react-router-dom
+```
+
+4. **Start the development server:**
+
+```bash
+npm start
+```
+
+### Explanation:
+- We have created individual components for each page: `Signup`, `Signin`, `Signout`, `ForgotPassword`, `ResetPassword`, `VerifyAccount`, and `Home`.
+- The main `App` component uses `useState` to manage authentication state and `useEffect` to check authentication status on load.
+- `localStorage` is used to store the `userId` when a user signs in and to remove it when they sign out.
+- Routes are defined for each component using `react-router-dom`.
+
+
 ## License
 
 This project is licensed under the MIT License.
