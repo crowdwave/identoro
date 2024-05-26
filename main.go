@@ -850,15 +850,46 @@ func isValidURL(url string) bool {
     return re.MatchString(url)
 }
 
+// isStaticallyLinked checks if the current binary is statically linked on Linux
+func isStaticallyLinked() bool {
+    f, err := os.Open("/proc/self/exe")
+    if err != nil {
+        log.Fatalf("Failed to open /proc/self/exe: %v", err)
+    }
+    defer f.Close()
+
+    buf := make([]byte, 1024)
+    _, err = f.Read(buf)
+    if err != nil {
+        log.Fatalf("Failed to read /proc/self/exe: %v", err)
+    }
+
+    // Look for the presence of the dynamic linker (e.g., /lib64/ld-linux-x86-64.so.2)
+    dynamicLinkers := []string{
+        "/lib64/ld-linux-x86-64.so.2",
+        "/lib/ld-linux.so.2",
+    }
+    for _, linker := range dynamicLinkers {
+        if len(buf) >= len(linker) && string(buf[:len(linker)]) == linker {
+            return false
+        }
+    }
+    return true
+}
+
 func jailSelf() {
-    // this function creates a directory to chroot into which ensures that if the process is compromised there are no visible files
-    // we can do this because the application is statically compiled so need access to nothing, not even libraries
-    // the other reason to do this is in case the working directory that we started from contains a .env file
-    
-    log.Println("Running on", runtime.GOOS)
+    // This function creates a directory to chroot into which ensures that if the process is compromised there are no visible files.
+    // We can do this because the application is statically compiled so it needs access to nothing, not even libraries.
+    // The other reason to do this is in case the working directory that we started from contains a .env file.
+
+    log.Println("Running on Linux")
     if runtime.GOOS != "linux" {
         log.Println("Skipping jailSelf: not running on Linux")
         return
+    }
+
+    if !isStaticallyLinked() {
+        log.Fatal("This program must be statically compiled!")
     }
 
     if os.Geteuid() != 0 {
@@ -926,19 +957,16 @@ func jailSelf() {
     // Perform the chroot operation
     if err = syscall.Chroot("."); err != nil {
         log.Fatalf("Failed to chroot: %v", err)
-        os.Exit(1)
     }
 
     // Set the group ID
     if err = syscall.Setgid(gid); err != nil {
         log.Fatalf("Failed to set group ID: %v", err)
-        os.Exit(1)
     }
 
     // Set the user ID
     if err = syscall.Setuid(uid); err != nil {
         log.Fatalf("Failed to set user ID: %v", err)
-        os.Exit(1)
     }
 
     log.Printf("Dropped privileges to user: %s and group: %s", userNameOrID, groupNameOrID)
