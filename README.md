@@ -1,4 +1,3 @@
-
 # Identoro User Signup Server for SQLite or PostgreSQL
 
 This is a Go web server that supports user signup, signin, password reset, and account verification functionalities. It uses PostgreSQL (via `pgx` driver) or SQLite for data storage and includes rate limiting for login attempts per account.
@@ -54,17 +53,26 @@ This is a Go web server that supports user signup, signin, password reset, and a
     HASH_KEY=your_hash_key
     ```
 
-## Generating HASH_KEY
+## Environment Variables
 
-The `HASH_KEY` is a secret key used for generating secure tokens for session management and CSRF protection. It is crucial to keep this key secure and private.
+- `DB_TYPE`: The type of database to use. Set to either `postgres` for PostgreSQL or `sqlite` for SQLite.
+- `DATABASE_URL`: The connection string for the database. For PostgreSQL, it typically looks like `postgres://user:password@hostname:port/dbname`. For SQLite, it is the path to the database file.
+- `SECRET_KEY`: A secret key used for session cookies and CSRF protection. It should be a strong, random string.
+- `EMAIL_SENDER`: The email address that will be used to send emails (e.g., noreply@example.com).
+- `EMAIL_PASSWORD`: The password for the email sender account.
+- `SMTP_HOST`: The SMTP server host used to send emails.
+- `SMTP_PORT`: The SMTP server port (e.g., 587 for TLS, 465 for SSL).
+- `WEB_SERVER_ADDRESS`: The address where the web server will be hosted (e.g., http://localhost:8080).
+- `EMAIL_REPLY_TO`: The reply-to email address for outgoing emails.
+- `RECAPTCHA_SITE_KEY`: The site key for Google reCAPTCHA used to verify human users.
+- `RECAPTCHA_SECRET_KEY`: The secret key for Google reCAPTCHA used to verify human users.
+- `USER`: The user name or ID to drop privileges to after the server has started. This is used for security purposes.
+- `GROUP`: The group name or ID to drop privileges to after the server has started. This is used for security purposes.
+- `HASH_KEY`: A secret key used for generating secure tokens. It should be a strong, random string. You can generate one using the following command:
 
-To generate a suitable `HASH_KEY` using Linux CLI, you can use the following command:
-
-```sh
-dd if=/dev/urandom bs=32 count=1 | base64
-```
-
-This command generates a 32-byte random string and encodes it in base64, which you can then use as your `HASH_KEY`.
+    ```sh
+    dd if=/dev/urandom bs=32 count=1 | base64
+    ```
 
 ## To compile it yourself
 
@@ -183,32 +191,15 @@ On Linux (not other platforms), this server must be started with sudo or as root
     - Success: `{"status": 303, "message": "Account verified"}`
     - Error: `{"status": 400, "message": "Invalid token"}` or other relevant error messages.
 
-## Configuration
-
-The server can be configured using the following environment variables:
-
-- `DB_TYPE` - Type of database (`postgres` or `sqlite`)
-- `DATABASE_URL` - Connection string for the database
-- `SECRET_KEY` - Secret key for session cookies and CSRF protection
-- `EMAIL_SENDER` - Email address used for sending emails
-- `EMAIL_PASSWORD` - Password for the email sender
-- `SMTP_HOST` - SMTP server host
-- `SMTP_PORT` - SMTP server port
-- `WEB_SERVER_ADDRESS` - Address of the web server
-- `EMAIL_REPLY_TO` - Reply-to email address
-- `RECAPTCHA_SITE_KEY` - Site key for Google reCAPTCHA
-- `RECAPTCHA_SECRET_KEY` - Secret key for Google reCAPTCHA
-- `USER` - User name or ID to drop privileges to
-- `GROUP` - Group name or ID to drop privileges to
-- `HASH_KEY` - Secret hash key for generating secure tokens
-
 ## Rate Limiting
 
 The server implements rate limiting to prevent abuse of the login functionality. Each account (username) is limited to 15 login attempts per hour. If the limit is exceeded, a "Too Many Requests" response is returned.
 
 ## Graceful Shutdown
 
-The server handles `SIGINT` and `SIGTERM` signals for graceful shutdown, ensuring that the database connection is properly closed before the server exits.
+The server handles `SIGINT` and `SIGTERM` signals
+
+ for graceful shutdown, ensuring that the database connection is properly closed before the server exits.
 
 ## Integration with PostgreSQL 
 
@@ -268,9 +259,7 @@ WHERE user_id = NEW.user_id;
 
 ### Key Points to Ensure
 
-- **Matching Data Types**: Ensure that the data types of the columns in the view match
-
- the data types of the columns in the underlying table. This is critical for insert, update, and select operations to work correctly.
+- **Matching Data Types**: Ensure that the data types of the columns in the view match the data types of the columns in the underlying table. This is critical for insert, update, and select operations to work correctly.
 - **Constraints and Defaults**: Any constraints (like `NOT NULL`, `DEFAULT`, etc.) or default values should also be considered to ensure data integrity.
 - **Indexes**: Indexes on the underlying table can help optimize the performance of queries on the view.
 
@@ -296,3 +285,6 @@ By ensuring data type consistency and respecting constraints, your views will co
 
 This project is licensed under the MIT License.
 
+---
+
+This documentation now fully explains each environment variable and provides detailed information about generating and using the `HASH_KEY`.
