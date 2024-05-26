@@ -1,8 +1,3 @@
-No, `reset_token` is no longer stored in the database. Instead, we are using a time-expiring signed string for the password reset functionality. The documentation needs to be updated to reflect this change.
-
-Here is the corrected and updated documentation:
-
----
 
 # Identoro User Signup Server for SQLite or PostgreSQL
 
@@ -56,7 +51,20 @@ This is a Go web server that supports user signup, signin, password reset, and a
     RECAPTCHA_SECRET_KEY=your_recaptcha_secret_key
     USER=your_user_name_or_id
     GROUP=your_group_name_or_id
+    HASH_KEY=your_hash_key
     ```
+
+## Generating HASH_KEY
+
+The `HASH_KEY` is a secret key used for generating secure tokens for session management and CSRF protection. It is crucial to keep this key secure and private.
+
+To generate a suitable `HASH_KEY` using Linux CLI, you can use the following command:
+
+```sh
+dd if=/dev/urandom bs=32 count=1 | base64
+```
+
+This command generates a 32-byte random string and encodes it in base64, which you can then use as your `HASH_KEY`.
 
 ## To compile it yourself
 
@@ -192,6 +200,7 @@ The server can be configured using the following environment variables:
 - `RECAPTCHA_SECRET_KEY` - Secret key for Google reCAPTCHA
 - `USER` - User name or ID to drop privileges to
 - `GROUP` - Group name or ID to drop privileges to
+- `HASH_KEY` - Secret hash key for generating secure tokens
 
 ## Rate Limiting
 
@@ -259,15 +268,15 @@ WHERE user_id = NEW.user_id;
 
 ### Key Points to Ensure
 
-- **Matching Data Types**: Ensure that the data types of the columns in the view match the data types of the columns in the underlying table. This is critical for insert, update, and select operations to work correctly.
+- **Matching Data Types**: Ensure that the data types of the columns in the view match
+
+ the data types of the columns in the underlying table. This is critical for insert, update, and select operations to work correctly.
 - **Constraints and Defaults**: Any constraints (like `NOT NULL`, `DEFAULT`, etc.) or default values should also be considered to ensure data integrity.
 - **Indexes**: Indexes on the underlying table can help optimize the performance of queries on the view.
 
 ### If you do not already have a users table
 
-If you do not have an existing users table, you can use the following SQL
-
- to create both the needed users table (in this context you do not need the views):
+If you do not have an existing users table, you can use the following SQL to create both the needed users table (in this context you do not need the views):
 
 ```sql
 -- Create the users table
@@ -286,3 +295,4 @@ By ensuring data type consistency and respecting constraints, your views will co
 ## License
 
 This project is licensed under the MIT License.
+
