@@ -1,17 +1,19 @@
 # Identoro User Signup and Signin Server for SQLite or PostgreSQL
 
-This is a Go web server that supports user signup, signin, password reset, and account verification functionalities. It uses PostgreSQL (via `pgx` driver) or SQLite for data storage and includes rate limiting for login attempts per account.
+This is single purpose web server that supports user signup, signin, password reset, and account verification functionalities. It uses PostgreSQL (via `pgx` driver) or SQLite for data storage and includes rate limiting for login attempts per account.
 
 ## Features
 
-- User Signup
-- User Signin
-- Password Reset (using time-expiring signed strings)
-- Account Verification
-- CSRF Protection
-- Rate Limiting (15 login attempts per account per hour)
-- Configurable via Environment Variables
-- Graceful Shutdown on SIGINT or SIGTERM
+- Entire server in single binary file
+- User signup
+- User signin
+- Password reset (using time-expiring signed strings)
+- Account verification
+- CSRF protection
+- Recaptcha support on login
+- Rate limiting on signins
+- Rate limiting on email sends
+- Configurable via environment variables
 
 ## Installation
 
