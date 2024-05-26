@@ -851,6 +851,10 @@ func isValidURL(url string) bool {
 }
 
 func jailSelf() {
+    // this function creates a directory to chroot into which ensures that if the process is compromised there are no visible files
+    // we can do this because the application is statically compiled so need access to nothing, not even libraries
+    // the other reason to do this is in case the working directory that we started from contains a .env file
+    
     log.Println("Running on", runtime.GOOS)
     if runtime.GOOS != "linux" {
         log.Println("Skipping jailSelf: not running on Linux")
@@ -868,6 +872,7 @@ func jailSelf() {
     var uid, gid int
     var err error
 
+    // Lookup user ID
     if userID, err := strconv.Atoi(userNameOrID); err == nil {
         uid = userID
     } else {
@@ -881,6 +886,7 @@ func jailSelf() {
         }
     }
 
+    // Lookup group ID
     if groupID, err := strconv.Atoi(groupNameOrID); err == nil {
         gid = groupID
     } else {
@@ -894,22 +900,47 @@ func jailSelf() {
         }
     }
 
-    err = syscall.Chroot(".")
-    if err != nil {
+    // Get the temporary directory path
+    tempDir := os.TempDir()
+
+    // Define the path for the chroot jail in the temporary directory
+    jailPath := filepath.Join(tempDir, "identorochroot")
+
+    // Remove existing directory if it exists
+    if _, err := os.Stat(jailPath); err == nil {
+        if err = os.RemoveAll(jailPath); err != nil {
+            log.Fatalf("Failed to remove existing directory: %v", err)
+        }
+    }
+
+    // Create the new directory
+    if err = os.Mkdir(jailPath, 0755); err != nil {
+        log.Fatalf("Failed to create directory: %v", err)
+    }
+
+    // Change the current working directory to the new directory
+    if err = os.Chdir(jailPath); err != nil {
+        log.Fatalf("Failed to change directory: %v", err)
+    }
+
+    // Perform the chroot operation
+    if err = syscall.Chroot("."); err != nil {
         log.Fatalf("Failed to chroot: %v", err)
         os.Exit(1)
     }
 
-    err = syscall.Setgid(gid)
-    if err != nil {
+    // Set the group ID
+    if err = syscall.Setgid(gid); err != nil {
         log.Fatalf("Failed to set group ID: %v", err)
         os.Exit(1)
     }
-    err = syscall.Setuid(uid)
-    if err != nil {
+
+    // Set the user ID
+    if err = syscall.Setuid(uid); err != nil {
         log.Fatalf("Failed to set user ID: %v", err)
         os.Exit(1)
     }
 
     log.Printf("Dropped privileges to user: %s and group: %s", userNameOrID, groupNameOrID)
 }
+
