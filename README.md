@@ -224,7 +224,6 @@ CREATE TABLE actual_users_table (
     passwd VARCHAR(100) NOT NULL,
     mail VARCHAR(100) NOT NULL,
     is_verified BOOLEAN NOT NULL DEFAULT FALSE,
-    verification_token VARCHAR(50),
     signin_count INTEGER NOT NULL DEFAULT 0,
     unsuccessful_signins INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -241,19 +240,18 @@ SELECT
     passwd AS password, 
     mail AS email, 
     is_verified AS verified, 
-    verification_token,
     signin_count,
     unsuccessful_signins,
     created_at
 FROM actual_users_table;
 
-CREATE RULE insert_identoro_users AS
+CREATE
+
+ RULE insert_identoro_users AS
 ON INSERT TO identoro_users
-
-
 DO INSTEAD
-INSERT INTO actual_users_table (user_name, passwd, mail, verification_token, signin_count, unsuccessful_signins, created_at) 
-VALUES (NEW.username, NEW.password, NEW.email, NEW.verification_token, NEW.signin_count, NEW.unsuccessful_signins, NEW.created_at);
+INSERT INTO actual_users_table (user_name, passwd, mail, is_verified, signin_count, unsuccessful_signins, created_at) 
+VALUES (NEW.username, NEW.password, NEW.email, NEW.verified, NEW.signin_count, NEW.unsuccessful_signins, NEW.created_at);
 
 CREATE RULE update_identoro_users AS
 ON UPDATE TO identoro_users
@@ -264,7 +262,6 @@ SET
     passwd = NEW.password,
     mail = NEW.email,
     is_verified = NEW.verified,
-    verification_token = NEW.verification_token,
     signin_count = NEW.signin_count,
     unsuccessful_signins = NEW.unsuccessful_signins,
     created_at = NEW.created_at
@@ -289,7 +286,6 @@ CREATE TABLE identoro_users (
     passwd VARCHAR(100) NOT NULL,
     mail VARCHAR(100) NOT NULL,
     is_verified BOOLEAN NOT NULL DEFAULT FALSE,
-    verification_token VARCHAR(50),
     signin_count INTEGER NOT NULL DEFAULT 0,
     unsuccessful_signins INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -310,7 +306,6 @@ CREATE TABLE identoro_users (
     passwd TEXT NOT NULL,
     mail TEXT NOT NULL,
     is_verified INTEGER NOT NULL DEFAULT 0,
-    verification_token TEXT,
     signin_count INTEGER NOT NULL DEFAULT 0,
     unsuccessful_signins INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -320,4 +315,3 @@ CREATE TABLE identoro_users (
 ## License
 
 This project is licensed under the MIT License.
-```
