@@ -6,6 +6,7 @@ import (
     "database/sql"
     "encoding/base64"
     "encoding/json"
+    "flag"
     "fmt"
     "html/template"
     "log"
@@ -63,6 +64,7 @@ type Config struct {
     RecaptchaSecretKey string
     User              string
     Group             string
+    HashKey           string
 }
 
 type User struct {
@@ -212,6 +214,7 @@ func loadConfig() (*Config, error) {
         RecaptchaSecretKey: os.Getenv("RECAPTCHA_SECRET_KEY"),
         User:              os.Getenv("USER"),
         Group:             os.Getenv("GROUP"),
+        HashKey:           os.Getenv("HASH_KEY"),
     }
 
     return config, nil
@@ -241,6 +244,7 @@ func printConfig(config *Config) {
     fmt.Printf("  RECAPTCHA_SECRET_KEY: %s\n", maskString(config.RecaptchaSecretKey))
     fmt.Printf("  USER: %s\n", config.User)
     fmt.Printf("  GROUP: %s\n", config.Group)
+    fmt.Printf("  HASH_KEY: %s\n", maskString(config.HashKey))
 
     if config.DbType == "postgres" {
         fmt.Println("\nExample SQL for creating an updatable view for PostgreSQL:")
@@ -301,7 +305,39 @@ func errorResponse(w http.ResponseWriter, statusCode int, message string) {
     log.Printf("Error: %s, StatusCode: %d", message, statusCode)
 }
 
+func displayHelp() {
+    fmt.Println("Usage: go run main.go [--help]")
+    fmt.Println()
+    fmt.Println("Environment Variables:")
+    fmt.Println("  DB_TYPE: The type of database to use (e.g., postgres, sqlite).")
+    fmt.Println("  DATABASE_URL: The connection string for the database.")
+    fmt.Println("  SECRET_KEY: The secret key for session management.")
+    fmt.Println("  EMAIL_SENDER: The email address to send emails from.")
+    fmt.Println("  EMAIL_PASSWORD: The password for the email sender.")
+    fmt.Println("  SMTP_HOST: The SMTP host for sending emails.")
+    fmt.Println("  SMTP_PORT: The SMTP port for sending emails.")
+    fmt.Println("  WEB_SERVER_ADDRESS: The address where the web server will be hosted.")
+    fmt.Println("  EMAIL_REPLY_TO: The email address for reply-to headers.")
+    fmt.Println("  RECAPTCHA_SITE_KEY: The site key for reCAPTCHA.")
+    fmt.Println("  RECAPTCHA_SECRET_KEY: The secret key for reCAPTCHA.")
+    fmt.Println("  USER: The user name or ID for dropping privileges.")
+    fmt.Println("  GROUP: The group name or ID for dropping privileges.")
+    fmt.Println("  HASH_KEY: The secret hash key for generating secure tokens.")
+    fmt.Println()
+    fmt.Println("Example of creating a suitable hash key using Linux CLI commands:")
+    fmt.Println("  dd if=/dev/urandom bs=32 count=1 | base64")
+    fmt.Println()
+    os.Exit(0)
+}
+
 func main() {
+    help := flag.Bool("help", false, "Display help information")
+    flag.Parse()
+
+    if *help {
+        displayHelp()
+    }
+
     var err error
     config, err = loadConfig()
     if err != nil {
@@ -406,7 +442,7 @@ func logRequest(handler http.Handler) http.Handler {
 }
 
 func homeHandler(w http.ResponseWriter, r *http.Request) {
-    if (!dbAvailable) {
+    if !dbAvailable {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
