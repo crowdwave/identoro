@@ -226,11 +226,6 @@ SET
     verification_token = NEW.verification_token
 WHERE user_id = NEW.user_id;
 
-CREATE RULE delete_identoro_users AS
-ON DELETE TO identoro_users
-DO INSTEAD
-DELETE FROM actual_users_table
-WHERE user_id = OLD.user_id;
 ```
 
 ### Key Points to Ensure
@@ -290,12 +285,6 @@ SET
     verification_token = NEW.verification_token
 WHERE user_id = NEW.user_id;
 
--- Create delete rule for the view
-CREATE RULE delete_identoro_users AS
-ON DELETE TO identoro_users
-DO INSTEAD
-DELETE FROM actual_users_table
-WHERE user_id = OLD.user_id;
 ```
 
 By ensuring data type consistency and respecting constraints, your views will correctly map the columns and provide seamless integration with the Identoro server's queries.
