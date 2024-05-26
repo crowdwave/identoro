@@ -4,16 +4,18 @@ This is single purpose web server that supports user signup, signin, password re
 
 ## Features
 
-- Entire server in single binary file
 - User signup
 - User signin
 - Password reset (using time-expiring signed strings)
-- Account verification
+- Account verification email
 - CSRF protection
-- Recaptcha support on login
-- Rate limiting on signins
+- Recaptcha support on signup
+- Rate limiting on signin attempts
 - Rate limiting on email sends
 - Configurable via environment variables
+- Works with Postgres or sqlite
+- Works with existing user tables in Postgres
+- Entire server in single binary file
 
 ## Installation
 
