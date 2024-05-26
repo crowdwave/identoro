@@ -197,9 +197,7 @@ The server implements rate limiting to prevent abuse of the login functionality.
 
 ## Graceful Shutdown
 
-The server handles `SIGINT` and `SIGTERM` signals
-
- for graceful shutdown, ensuring that the database connection is properly closed before the server exits.
+The server handles `SIGINT` and `SIGTERM` signals for graceful shutdown, ensuring that the database connection is properly closed before the server exits.
 
 ## Integration with PostgreSQL 
 
@@ -220,7 +218,9 @@ CREATE TABLE actual_users_table (
     passwd VARCHAR(100) NOT NULL,
     mail VARCHAR(100) NOT NULL,
     is_verified BOOLEAN NOT NULL DEFAULT FALSE,
-    verification_token VARCHAR(50)
+    verification_token VARCHAR(50),
+    signin_count INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 ```
 
@@ -234,14 +234,18 @@ SELECT
     passwd AS password, 
     mail AS email, 
     is_verified AS verified, 
-    verification_token 
+    verification_token,
+    signin_count,
+    created_at
 FROM actual_users_table;
 
 CREATE RULE insert_identoro_users AS
 ON INSERT TO identoro_users
 DO INSTEAD
-INSERT INTO actual_users_table (user_name, passwd, mail, verification_token) 
-VALUES (NEW.username, NEW.password, NEW.email, NEW.verification_token);
+INSERT INTO actual_users_table (user_name, passwd, mail, verification_token, signin_count, created_at) 
+VALUES (NEW.username, NEW.password, NEW.email, NEW.verification_token
+
+, NEW.signin_count, NEW.created_at);
 
 CREATE RULE update_identoro_users AS
 ON UPDATE TO identoro_users
@@ -252,7 +256,9 @@ SET
     passwd = NEW.password,
     mail = NEW.email,
     is_verified = NEW.verified,
-    verification_token = NEW.verification_token
+    verification_token = NEW.verification_token,
+    signin_count = NEW.signin_count,
+    created_at = NEW.created_at
 WHERE user_id = NEW.user_id;
 
 ```
@@ -275,49 +281,16 @@ CREATE TABLE identoro_users (
     passwd VARCHAR(100) NOT NULL,
     mail VARCHAR(100) NOT NULL,
     is_verified BOOLEAN NOT NULL DEFAULT FALSE,
-    verification_token VARCHAR(50)
+    verification_token VARCHAR(50),
+    signin_count INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 ```
 
 By ensuring data type consistency and respecting constraints, your views will correctly map the columns and provide seamless integration with the Identoro server's queries.
 
 
-To turn this into a Create React App (CRA) project with TypeScript, follow these steps:
-
-1. **Install Create React App with TypeScript:**
-
-```bash
-npx create-react-app identoro-client --template typescript
-cd identoro-client
-```
-
-2. **Replace the content of `src/App.tsx` with the provided code in ui_react.tsx:**
-
-
-
-3. **Install additional dependencies:**
-
-```bash
-npm install react-router-dom @types/react-router-dom
-```
-
-4. **Start the development server:**
-
-```bash
-npm start
-```
-
-### Explanation:
-- We have created individual components for each page: `Signup`, `Signin`, `Signout`, `ForgotPassword`, `ResetPassword`, `VerifyAccount`, and `Home`.
-- The main `App` component uses `useState` to manage authentication state and `useEffect` to check authentication status on load.
-- `localStorage` is used to store the `userId` when a user signs in and to remove it when they sign out.
-- Routes are defined for each component using `react-router-dom`.
-
-
 ## License
 
 This project is licensed under the MIT License.
 
----
-
-This documentation now fully explains each environment variable and provides detailed information about generating and using the `HASH_KEY`.
