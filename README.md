@@ -265,7 +265,7 @@ If you do not have an existing users table, you can use the following SQL to cre
 
 ```sql
 -- Create the users table
-CREATE TABLE actual_users_table (
+CREATE TABLE identoro_users (
     user_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_name VARCHAR(50) NOT NULL,
     passwd VARCHAR(100) NOT NULL,
