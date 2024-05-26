@@ -2,6 +2,8 @@
 
 This is single purpose web server that supports user signup, signin, password reset, and account verification functionalities. It uses PostgreSQL (via `pgx` driver) or SQLite for data storage and includes rate limiting for login attempts per account.
 
+The idea is that you don't have to build all this stuff (AGAIN), you can just get on with building your application.
+
 ## Features
 
 - User signup
