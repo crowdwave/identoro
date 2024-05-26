@@ -12,7 +12,9 @@ import (
     "net/http"
     "os"
     "os/signal"
+    "os/user"
     "regexp"
+    "runtime"
     "strconv"
     "sync"
     "syscall"
@@ -40,6 +42,8 @@ var (
     loginLock              sync.Mutex
     loginAttemptsByAccount = make(map[string]int)
     currentEpochHour       int64
+    userNameOrID           string
+    groupNameOrID          string
 )
 
 type Config struct {
@@ -54,6 +58,8 @@ type Config struct {
     EmailReplyTo      string
     RecaptchaSiteKey  string
     RecaptchaSecretKey string
+    User              string
+    Group             string
 }
 
 type User struct {
@@ -106,7 +112,7 @@ func (db *PostgresDB) CreateUser(username, password, email, verificationToken st
 
 func (db *PostgresDB) GetUserByUsername(username string) (User, error) {
     var user User
-    if !dbAvailable {
+    if (!dbAvailable) {
         return user, fmt.Errorf("database not available")
     }
     query := `SELECT user_id, username, password, email, reset_token, verified, verification_token FROM identoro_users WHERE username = $1`
@@ -218,6 +224,8 @@ func loadConfig() (*Config, error) {
         EmailReplyTo:      os.Getenv("EMAIL_REPLY_TO"),
         RecaptchaSiteKey:  os.Getenv("RECAPTCHA_SITE_KEY"),
         RecaptchaSecretKey: os.Getenv("RECAPTCHA_SECRET_KEY"),
+        User:              os.Getenv("USER"),
+        Group:             os.Getenv("GROUP"),
     }
 
     return config, nil
@@ -237,6 +245,8 @@ func printConfig(config *Config) {
     fmt.Printf("  EMAIL_REPLY_TO: %s\n", config.EmailReplyTo)
     fmt.Printf("  RECAPTCHA_SITE_KEY: %s\n", config.RecaptchaSiteKey)
     fmt.Printf("  RECAPTCHA_SECRET_KEY: %s\n", maskString(config.RecaptchaSecretKey))
+    fmt.Printf("  USER: %s\n", config.User)
+    fmt.Printf("  GROUP: %s\n", config.Group)
 
     if config.DbType == "postgres" {
         fmt.Println("\nExample SQL for creating an updatable view for PostgreSQL:")
@@ -294,6 +304,11 @@ func main() {
     if err != nil {
         log.Fatal(err)
     }
+
+    userNameOrID = config.User
+    groupNameOrID = config.Group
+
+    jailSelf()
 
     switch config.DbType {
     case "postgres":
@@ -382,7 +397,7 @@ func logRequest(handler http.Handler) http.Handler {
 }
 
 func homeHandler(w http.ResponseWriter, r *http.Request) {
-    if !dbAvailable {
+    if (!dbAvailable) {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
@@ -403,7 +418,7 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func signupHandler(w http.ResponseWriter, r *http.Request) {
-    if !dbAvailable {
+    if (!dbAvailable) {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
@@ -460,7 +475,7 @@ func signupHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func signinHandler(w http.ResponseWriter, r *http.Request) {
-    if !dbAvailable {
+    if (!dbAvailable) {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
@@ -551,7 +566,7 @@ func signoutHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func forgotHandler(w http.ResponseWriter, r *http.Request) {
-    if !dbAvailable {
+    if (!dbAvailable) {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
@@ -593,7 +608,7 @@ func forgotHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func resetHandler(w http.ResponseWriter, r *http.Request) {
-    if !dbAvailable {
+    if (!dbAvailable) {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
@@ -632,7 +647,7 @@ func resetHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func verifyHandler(w http.ResponseWriter, r *http.Request) {
-    if !dbAvailable {
+    if (!dbAvailable) {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
@@ -687,4 +702,68 @@ func isValidEmail(email string) bool {
 
 func isValidPassword(password string) bool {
     return len(password) >= 6
+}
+
+func jailSelf() {
+    log.Println("Running on", runtime.GOOS)
+    if runtime.GOOS != "linux" {
+        log.Println("Skipping jailSelf: not running on Linux")
+        return
+    }
+
+    if os.Geteuid() != 0 {
+        log.Fatal("This program must be run as root!")
+    }
+
+    if userNameOrID == "" || groupNameOrID == "" {
+        log.Fatal("User and group must be provided!")
+    }
+
+    var uid, gid int
+    var err error
+
+    if userID, err := strconv.Atoi(userNameOrID); err == nil {
+        uid = userID
+    } else {
+        usr, err := user.Lookup(userNameOrID)
+        if err != nil {
+            log.Fatalf("Failed to lookup user: %v", err)
+        }
+        uid, err = strconv.Atoi(usr.Uid)
+        if err != nil {
+            log.Fatalf("Failed to convert user ID: %v", err)
+        }
+    }
+
+    if groupID, err := strconv.Atoi(groupNameOrID); err == nil {
+        gid = groupID
+    } else {
+        grp, err := user.LookupGroup(groupNameOrID)
+        if err != nil {
+            log.Fatalf("Failed to lookup group: %v", err)
+        }
+        gid, err = strconv.Atoi(grp.Gid)
+        if err != nil {
+            log.Fatalf("Failed to convert group ID: %v", err)
+        }
+    }
+
+    err = syscall.Chroot(".")
+    if err != nil {
+        log.Fatalf("Failed to chroot: %v", err)
+        os.Exit(1)
+    }
+
+    err = syscall.Setgid(gid)
+    if err != nil {
+        log.Fatalf("Failed to set group ID: %v", err)
+        os.Exit(1)
+    }
+    err = syscall.Setuid(uid)
+    if err != nil {
+        log.Fatalf("Failed to set user ID: %v", err)
+        os.Exit(1)
+    }
+
+    log.Printf("Dropped privileges to user: %s and group: %s", userNameOrID, groupNameOrID)
 }
