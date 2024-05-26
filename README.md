@@ -95,27 +95,76 @@ The server implements rate limiting to prevent abuse of the login functionality.
 
 The server handles `SIGINT` and `SIGTERM` signals for graceful shutdown, ensuring that the database connection is properly closed before the server exits.
 
-## Example SQL for PostgreSQL Updatable View
+## Integration with PostgreSQL 
 
-If you are using PostgreSQL, you might need an updatable view for compatibility with existing tables. Here is an example SQL script:
+Identoro's works with your existing Postgres users table via Postgres views.  So you need to create the needed views on your Postgres server, ensuring the required fields are present and have matching column data types. 
+
+The view names must be exactly as shown below and all fields must be present - your job is to put in the name of your users table and the names of the fields in your users table.
+
+### Example:
+
+Assuming your actual `users` table (`actual_users_table`) has the following schema:
 
 ```sql
-CREATE VIEW user_view AS
-SELECT id, user_name AS username, passwd AS password, mail AS email, reset_token, is_verified AS verified, verification_token
-FROM old_users_table;
+CREATE TABLE actual_users_table (
+    user_id SERIAL PRIMARY KEY,
+    user_name VARCHAR(50) NOT NULL,
+    passwd VARCHAR(100) NOT NULL,
+    mail VARCHAR(100) NOT NULL,
+    reset_token VARCHAR(50),
+    is_verified BOOLEAN NOT NULL DEFAULT FALSE,
+    verification_token VARCHAR(50)
+);
+```
 
-CREATE RULE update_user_view AS
-ON UPDATE TO user_view
+Your view should ensure that the columns have the same data types:
+
+```sql
+CREATE VIEW identoro_users AS
+SELECT 
+    user_id AS id, 
+    user_name AS username, 
+    passwd AS password, 
+    mail AS email, 
+    reset_token, 
+    is_verified AS verified, 
+    verification_token 
+FROM actual_users_table;
+
+CREATE RULE insert_identoro_users AS
+ON INSERT TO identoro_users
 DO INSTEAD
-UPDATE old_users_table
-SET user_name = NEW.username,
+INSERT INTO actual_users_table (user_name, passwd, mail, verification_token) 
+VALUES (NEW.username, NEW.password, NEW.email, NEW.verification_token);
+
+CREATE RULE update_identoro_users AS
+ON UPDATE TO identoro_users
+DO INSTEAD
+UPDATE actual_users_table
+SET 
+    user_name = NEW.username,
     passwd = NEW.password,
     mail = NEW.email,
     reset_token = NEW.reset_token,
     is_verified = NEW.verified,
     verification_token = NEW.verification_token
-WHERE id = NEW.id;
+WHERE user_id = NEW.id;
+
+CREATE RULE delete_identoro_users AS
+ON DELETE TO identoro_users
+DO INSTEAD
+DELETE FROM actual_users_table
+WHERE user_id = OLD.id;
 ```
+
+### Key Points to Ensure
+
+- **Matching Data Types**: Ensure that the data types of the columns in the view match the data types of the columns in the underlying table. This is critical for insert, update, and select operations to work correctly.
+- **Matching Data Types (string data types)**: it is possible that the various Postgres string data types such as varchar and text may be compatible but this is not tested.
+- **Constraints and Defaults**: Any constraints (like `NOT NULL`, `DEFAULT`, etc.) or default values should also be considered to ensure data integrity.
+- **Indexes**: Indexes on the underlying table can help optimize the performance of queries on the view.
+
+By ensuring data type consistency and respecting constraints, your views will correctly map the columns and provide seamless integration with the Identoro server's queries.
 
 ## License
 
