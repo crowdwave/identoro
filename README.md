@@ -50,7 +50,32 @@ This is a Go web server that supports user signup, signin, password reset, and a
     RECAPTCHA_SECRET_KEY=your_recaptcha_secret_key
     ```
 
+## To compile it yourself
+
+A binary is provided for 64 bit AMD64 linux but you can compile it yourself for other platforms.
+
+Clone the repository:
+
+```sh
+git clone https://github.com/crowdwave/identoro.git
+cd identoro
+```
+
+Build the server:
+
+# important! this program must be compiled with the CGO_ENABLED=0 flag set or it will not work.
+
+```sh
+go mod tidy
+CGO_ENABLED=0 go build -o identoro identoro.go
+```
+
 ## Usage
+
+## Why must identoro be started with sudo?
+
+On linux (not other platforms) this server must be started with sudo or as root. This is because when the server starts it puts itself in a chroot jail which means it cannot see files outside its working directory. This is why you are required to provide --user and --group on the command line so that the server can change its user and group to a non-root user after it has started.  This is a security feature to prevent the server from being able to access the entire file system.
+
 
 1. **Run the server:**
 
