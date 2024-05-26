@@ -160,33 +160,33 @@ func (db *SQLiteDB) Open() error {
 
 func (db *SQLiteDB) CreateUser(username, password, email, verificationToken string) error {
     userID := uuid.New().String()
-    query := `INSERT INTO users (user_id, username, password, email, verification_token) VALUES (?, ?, ?, ?, ?)`
+    query := `INSERT INTO identoro_users (user_id, username, password, email, verification_token) VALUES (?, ?, ?, ?, ?)`
     _, err := db.db.Exec(query, userID, username, password, email, verificationToken)
     return err
 }
 
 func (db *SQLiteDB) GetUserByUsername(username string) (User, error) {
     var user User
-    query := `SELECT user_id, username, password, email, reset_token, verified, verification_token FROM users WHERE username = ?`
+    query := `SELECT user_id, username, password, email, reset_token, verified, verification_token FROM identoro_users WHERE username = ?`
     row := db.db.QueryRow(query, username)
     err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.ResetToken, &user.Verified, &user.VerificationToken)
     return user, err
 }
 
 func (db *SQLiteDB) UpdateUserVerification(token string) error {
-    query := `UPDATE users SET verified = 1, verification_token = NULL WHERE verification_token = ?`
+    query := `UPDATE identoro_users SET verified = 1, verification_token = NULL WHERE verification_token = ?`
     _, err := db.db.Exec(query, token)
     return err
 }
 
 func (db *SQLiteDB) UpdateUserResetToken(email, resetToken string) error {
-    query := `UPDATE users SET reset_token = ? WHERE email = ?`
+    query := `UPDATE identoro_users SET reset_token = ? WHERE email = ?`
     _, err := db.db.Exec(query, resetToken, email)
     return err
 }
 
 func (db *SQLiteDB) UpdateUserPassword(token, hashedPassword string) error {
-    query := `UPDATE users SET password = ?, reset_token = NULL WHERE reset_token = ?`
+    query := `UPDATE identoro_users SET password = ?, reset_token = NULL WHERE reset_token = ?`
     _, err := db.db.Exec(query, hashedPassword, token)
     return err
 }
@@ -414,7 +414,7 @@ func signupHandler(w http.ResponseWriter, r *http.Request) {
         recaptchaResponse := r.FormValue("g-recaptcha-response")
 
         if !isValidUsername(username) || !isValidEmail(email) || !isValidPassword(password) {
-            if r.Header.Get("Content-Type") == "application/json" {
+            if r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusBadRequest, "Invalid input", nil)
             } else {
                 errorResponse(w, http.StatusBadRequest, "Invalid input")
@@ -422,8 +422,8 @@ func signupHandler(w http.ResponseWriter, r *http.Request) {
             return
         }
 
-        if !verifyRecaptcha(recaptchaResponse) {
-            if r.Header.Get("Content-Type") == "application/json" {
+        if (!verifyRecaptcha(recaptchaResponse)) {
+            if r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusBadRequest, "Invalid reCAPTCHA", nil)
             } else {
                 errorResponse(w, http.StatusBadRequest, "Invalid reCAPTCHA")
@@ -435,7 +435,7 @@ func signupHandler(w http.ResponseWriter, r *http.Request) {
         verificationToken := generateToken()
         err := db.CreateUser(username, string(hashedPassword), email, verificationToken)
         if err != nil {
-            if r.Header.Get("Content-Type") == "application/json" {
+            if r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusBadRequest, "Username or email already exists", nil)
             } else {
                 errorResponse(w, http.StatusBadRequest, "Username or email already exists")
@@ -447,7 +447,7 @@ func signupHandler(w http.ResponseWriter, r *http.Request) {
         emailBody := fmt.Sprintf("Please click the following link to verify your account: %s", verificationURL)
         sendEmail(email, "Verify your account", emailBody)
 
-        if r.Header.Get("Content-Type") == "application/json" {
+        if r.Header.Get("Content-Type") == "application/json") {
             jsonResponse(w, http.StatusSeeOther, "Signup successful, please verify your email", nil)
         } else {
             http.Redirect(w, r, "/signin", http.StatusSeeOther)
@@ -469,7 +469,7 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
         password := r.FormValue("password")
 
         if !isValidUsername(username) || !isValidPassword(password) {
-            if r.Header.Get("Content-Type") == "application/json" {
+            if r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusBadRequest, "Invalid input", nil)
             } else {
                 errorResponse(w, http.StatusBadRequest, "Invalid input")
@@ -487,7 +487,7 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
         attempts := loginAttemptsByAccount[username]
         if attempts >= loginMaxPerHour {
             loginLock.Unlock()
-            if r.Header.Get("Content-Type") == "application/json" {
+            if r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusTooManyRequests, "Too many login attempts", nil)
             } else {
                 errorResponse(w, http.StatusTooManyRequests, "Too many login attempts")
@@ -499,7 +499,7 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
 
         user, err := db.GetUserByUsername(username)
         if err != nil {
-            if r.Header.Get("Content-Type") == "application/json" {
+            if r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusUnauthorized, "Invalid credentials", nil)
             } else {
                 errorResponse(w, http.StatusUnauthorized, "Invalid credentials")
@@ -508,7 +508,7 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
         }
 
         if !user.Verified {
-            if r.Header.Get("Content-Type") == "application/json" {
+            if r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusUnauthorized, "Account not verified", nil)
             } else {
                 errorResponse(w, http.StatusUnauthorized, "Account not verified")
@@ -517,7 +517,7 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
         }
 
         if bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password)) != nil {
-            if r.Header.Get("Content-Type") == "application/json" {
+            if r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusUnauthorized, "Invalid credentials", nil)
             } else {
                 errorResponse(w, http.StatusUnauthorized, "Invalid credentials")
@@ -529,7 +529,7 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
         session.Values["username"] = username
         session.Save(r, w)
 
-        if r.Header.Get("Content-Type") == "application/json" {
+        if r.Header.Get("Content-Type") == "application/json") {
             jsonResponse(w, http.StatusSeeOther, "Signin successful", nil)
         } else {
             http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -543,7 +543,7 @@ func signoutHandler(w http.ResponseWriter, r *http.Request) {
     session, _ := store.Get(r, "session")
     delete(session.Values, "username")
     session.Save(r, w)
-    if r.Header.Get("Content-Type") == "application/json" {
+    if r.Header.Get("Content-Type") == "application/json") {
         jsonResponse(w, http.StatusOK, "Signout successful", nil)
     } else {
         http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -559,7 +559,7 @@ func forgotHandler(w http.ResponseWriter, r *http.Request) {
         email := r.FormValue("email")
 
         if !isValidEmail(email) {
-            if r.Header.Get("Content-Type") == "application/json" {
+            if r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusBadRequest, "Invalid email", nil)
             } else {
                 errorResponse(w, http.StatusBadRequest, "Invalid email")
@@ -570,7 +570,7 @@ func forgotHandler(w http.ResponseWriter, r *http.Request) {
         resetToken := generateToken()
         err := db.UpdateUserResetToken(email, resetToken)
         if err != nil {
-            if r.Header.Get("Content-Type") == "application/json" {
+            if r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusBadRequest, "Invalid email", nil)
             } else {
                 errorResponse(w, http.StatusBadRequest, "Invalid email")
@@ -582,7 +582,7 @@ func forgotHandler(w http.ResponseWriter, r *http.Request) {
         emailBody := fmt.Sprintf("Click the link to reset your password: %s", resetURL)
         sendEmail(email, "Reset your password", emailBody)
 
-        if r.Header.Get("Content-Type") == "application/json" {
+        if r.Header.Get("Content-Type") == "application/json") {
             jsonResponse(w, http.StatusSeeOther, "Password reset email sent", nil)
         } else {
             http.Redirect(w, r, "/signin", http.StatusSeeOther)
@@ -602,7 +602,7 @@ func resetHandler(w http.ResponseWriter, r *http.Request) {
         newPassword := r.FormValue("new_password")
 
         if !isValidPassword(newPassword) {
-            if r.Header.Get("Content-Type") == "application/json" {
+            if r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusBadRequest, "Invalid input", nil)
             } else {
                 errorResponse(w, http.StatusBadRequest, "Invalid input")
@@ -613,7 +613,7 @@ func resetHandler(w http.ResponseWriter, r *http.Request) {
         hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
         err := db.UpdateUserPassword(token, string(hashedPassword))
         if err != nil {
-            if r.Header.Get("Content-Type") == "application/json" {
+            if r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusBadRequest, "Invalid token", nil)
             } else {
                 errorResponse(w, http.StatusBadRequest, "Invalid token")
@@ -621,7 +621,7 @@ func resetHandler(w http.ResponseWriter, r *http.Request) {
             return
         }
 
-        if r.Header.Get("Content-Type") == "application/json" {
+        if r.Header.Get("Content-Type") == "application/json") {
             jsonResponse(w, http.StatusSeeOther, "Password reset successful", nil)
         } else {
             http.Redirect(w, r, "/signin", http.StatusSeeOther)
@@ -639,7 +639,7 @@ func verifyHandler(w http.ResponseWriter, r *http.Request) {
     token := r.URL.Query().Get("token")
     err := db.UpdateUserVerification(token)
     if err != nil {
-        if r.Header.Get("Content-Type") == "application/json" {
+        if r.Header.Get("Content-Type") == "application/json") {
             jsonResponse(w, http.StatusBadRequest, "Invalid token", nil)
         } else {
             errorResponse(w, http.StatusBadRequest, "Invalid token")
@@ -647,7 +647,7 @@ func verifyHandler(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    if r.Header.Get("Content-Type") == "application/json" {
+    if r.Header.Get("Content-Type") == "application/json") {
         jsonResponse(w, http.StatusSeeOther, "Account verified", nil)
     } else {
         http.Redirect(w, r, "/signin", http.StatusSeeOther)
