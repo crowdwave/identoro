@@ -1,5 +1,3 @@
-Here is the updated documentation with separate sections for users who already have a users table and those who do not:
-
 # Identoro User Signup Server for SQLite or PostgreSQL
 
 This is a Go web server that supports user signup, signin, password reset, and account verification functionalities. It uses PostgreSQL (via `pgx` driver) or SQLite for data storage and includes rate limiting for login attempts per account.
@@ -66,12 +64,86 @@ This is a Go web server that supports user signup, signin, password reset, and a
 
 ## API Endpoints
 
-- `/signup` - User signup
-- `/signin` - User signin
-- `/signout` - User signout
-- `/forgot` - Password reset request
-- `/reset` - Password reset
-- `/verify` - Account verification
+### `/signup` - User Signup
+
+- **Method**: POST
+- **Expected Data**:
+    ```json
+    {
+        "username": "string",
+        "email": "string",
+        "password": "string",
+        "g-recaptcha-response": "string"
+    }
+    ```
+- **HTML Output**: Renders the signup page.
+- **JSON Output**: 
+    - Success: `{"status": 303, "message": "Signup successful, please verify your email"}`
+    - Error: `{"status": 400, "message": "Invalid input"}` or other relevant error messages.
+
+### `/signin` - User Signin
+
+- **Method**: POST
+- **Expected Data**:
+    ```json
+    {
+        "username": "string",
+        "password": "string"
+    }
+    ```
+- **HTML Output**: Renders the signin page.
+- **JSON Output**:
+    - Success: `{"status": 303, "message": "Signin successful"}`
+    - Error: `{"status": 400, "message": "Invalid input"}` or other relevant error messages.
+
+### `/signout` - User Signout
+
+- **Method**: GET
+- **HTML Output**: Redirects to the home page.
+- **JSON Output**: `{"status": 200, "message": "Signout successful"}`
+
+### `/forgot` - Password Reset Request
+
+- **Method**: POST
+- **Expected Data**:
+    ```json
+    {
+        "email": "string"
+    }
+    ```
+- **HTML Output**: Renders the forgot password page.
+- **JSON Output**:
+    - Success: `{"status": 303, "message": "Password reset email sent"}`
+    - Error: `{"status": 400, "message": "Invalid email"}` or other relevant error messages.
+
+### `/reset` - Password Reset
+
+- **Method**: POST
+- **Expected Data**:
+    ```json
+    {
+        "token": "string",
+        "new_password": "string"
+    }
+    ```
+- **HTML Output**: Renders the reset password page.
+- **JSON Output**:
+    - Success: `{"status": 303, "message": "Password reset successful"}`
+    - Error: `{"status": 400, "message": "Invalid token"}` or other relevant error messages.
+
+### `/verify` - Account Verification
+
+- **Method**: GET
+- **Expected Data**:
+    ```json
+    {
+        "token": "string"
+    }
+    ```
+- **HTML Output**: Redirects to the signin page.
+- **JSON Output**:
+    - Success: `{"status": 303, "message": "Account verified"}`
+    - Error: `{"status": 400, "message": "Invalid token"}` or other relevant error messages.
 
 ## Configuration
 
@@ -203,6 +275,8 @@ INSERT INTO actual_users_table (user_name, passwd, mail, verification_token)
 VALUES (NEW.username, NEW.password, NEW.email, NEW.verification_token);
 
 -- Create update rule for the view
+
+
 CREATE RULE update_identoro_users AS
 ON UPDATE TO identoro_users
 DO INSTEAD
