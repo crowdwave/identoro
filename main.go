@@ -75,6 +75,7 @@ type User struct {
     Verified          bool
     VerificationToken sql.NullString
     SigninCount       int
+    UnsuccessfulSignins int
     CreatedAt         time.Time
 }
 
@@ -85,6 +86,8 @@ type Database interface {
     UpdateUserVerification(token string) error
     UpdateUserPasswordByEmail(email, hashedPassword string) error
     IncrementSigninCount(userID string) error
+    IncrementUnsuccessfulSignins(username string) error
+    ResetUnsuccessfulSignins(username string) error
     TestConnection() error
 }
 
@@ -111,24 +114,24 @@ func (db *PostgresDB) CreateUser(username, password, email, verificationToken st
         return fmt.Errorf("database not available")
     }
     userID := uuid.New().String()
-    query := `INSERT INTO identoro_users (user_id, username, password, email, verification_token, signin_count, created_at) VALUES ($1, $2, $3, $4, $5, 0, CURRENT_TIMESTAMP)`
+    query := `INSERT INTO identoro_users (user_id, username, password, email, verification_token, signin_count, unsuccessful_signins, created_at) VALUES ($1, $2, $3, $4, $5, 0, 0, CURRENT_TIMESTAMP)`
     _, err := db.pool.Exec(context.Background(), query, userID, username, password, email, verificationToken)
     return err
 }
 
 func (db *PostgresDB) GetUserByUsername(username string) (User, error) {
     var user User
-    if !dbAvailable {
+    if (!dbAvailable) {
         return user, fmt.Errorf("database not available")
     }
-    query := `SELECT user_id, username, password, email, verified, verification_token, signin_count, created_at FROM identoro_users WHERE username = $1`
+    query := `SELECT user_id, username, password, email, verified, verification_token, signin_count, unsuccessful_signins, created_at FROM identoro_users WHERE username = $1`
     row := db.pool.QueryRow(context.Background(), query, username)
-    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Verified, &user.VerificationToken, &user.SigninCount, &user.CreatedAt)
+    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Verified, &user.VerificationToken, &user.SigninCount, &user.UnsuccessfulSignins, &user.CreatedAt)
     return user, err
 }
 
 func (db *PostgresDB) UpdateUserVerification(token string) error {
-    if !dbAvailable {
+    if (!dbAvailable) {
         return fmt.Errorf("database not available")
     }
     query := `UPDATE identoro_users SET verified = TRUE, verification_token = NULL WHERE verification_token = $1`
@@ -137,7 +140,7 @@ func (db *PostgresDB) UpdateUserVerification(token string) error {
 }
 
 func (db *PostgresDB) UpdateUserPasswordByEmail(email, hashedPassword string) error {
-    if !dbAvailable {
+    if (!dbAvailable) {
         return fmt.Errorf("database not available")
     }
     query := `UPDATE identoro_users SET password = $1 WHERE email = $2`
@@ -148,6 +151,18 @@ func (db *PostgresDB) UpdateUserPasswordByEmail(email, hashedPassword string) er
 func (db *PostgresDB) IncrementSigninCount(userID string) error {
     query := `UPDATE identoro_users SET signin_count = signin_count + 1 WHERE user_id = $1`
     _, err := db.pool.Exec(context.Background(), query, userID)
+    return err
+}
+
+func (db *PostgresDB) IncrementUnsuccessfulSignins(username string) error {
+    query := `UPDATE identoro_users SET unsuccessful_signins = unsuccessful_signins + 1 WHERE username = $1`
+    _, err := db.pool.Exec(context.Background(), query, username)
+    return err
+}
+
+func (db *PostgresDB) ResetUnsuccessfulSignins(username string) error {
+    query := `UPDATE identoro_users SET unsuccessful_signins = 0 WHERE username = $1`
+    _, err := db.pool.Exec(context.Background(), query, username)
     return err
 }
 
@@ -169,16 +184,16 @@ func (db *SQLiteDB) Open() error {
 
 func (db *SQLiteDB) CreateUser(username, password, email, verificationToken string) error {
     userID := uuid.New().String()
-    query := `INSERT INTO identoro_users (user_id, username, password, email, verification_token, signin_count, created_at) VALUES (?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP)`
+    query := `INSERT INTO identoro_users (user_id, username, password, email, verification_token, signin_count, unsuccessful_signins, created_at) VALUES (?, ?, ?, ?, ?, 0, 0, CURRENT_TIMESTAMP)`
     _, err := db.db.Exec(query, userID, username, password, email, verificationToken)
     return err
 }
 
 func (db *SQLiteDB) GetUserByUsername(username string) (User, error) {
     var user User
-    query := `SELECT user_id, username, password, email, verified, verification_token, signin_count, created_at FROM identoro_users WHERE username = ?`
+    query := `SELECT user_id, username, password, email, verified, verification_token, signin_count, unsuccessful_signins, created_at FROM identoro_users WHERE username = ?`
     row := db.db.QueryRow(query, username)
-    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Verified, &user.VerificationToken, &user.SigninCount, &user.CreatedAt)
+    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Verified, &user.VerificationToken, &user.SigninCount, &user.UnsuccessfulSignins, &user.CreatedAt)
     return user, err
 }
 
@@ -197,6 +212,18 @@ func (db *SQLiteDB) UpdateUserPasswordByEmail(email, hashedPassword string) erro
 func (db *SQLiteDB) IncrementSigninCount(userID string) error {
     query := `UPDATE identoro_users SET signin_count = signin_count + 1 WHERE user_id = ?`
     _, err := db.db.Exec(query, userID)
+    return err
+}
+
+func (db *SQLiteDB) IncrementUnsuccessfulSignins(username string) error {
+    query := `UPDATE identoro_users SET unsuccessful_signins = unsuccessful_signins + 1 WHERE username = ?`
+    _, err := db.db.Exec(query, username)
+    return err
+}
+
+func (db *SQLiteDB) ResetUnsuccessfulSignins(username string) error {
+    query := `UPDATE identoro_users SET unsuccessful_signins = 0 WHERE username = ?`
+    _, err := db.db.Exec(query, username)
     return err
 }
 
@@ -242,7 +269,7 @@ func loadConfig() (*Config, error) {
     if !isValidEmail(config.EmailSender) {
         return nil, fmt.Errorf("invalid EMAIL_SENDER value in .env file")
     }
-    if !isValidEmail(config.EmailReplyTo) {
+    if (!isValidEmail(config.EmailReplyTo) {
         return nil, fmt.Errorf("invalid EMAIL_REPLY_TO value in .env file")
     }
 
@@ -278,14 +305,14 @@ func printConfig(config *Config) {
     if config.DbType == "postgres" {
         fmt.Println("\nExample SQL for creating an updatable view for PostgreSQL:")
         fmt.Println(`CREATE VIEW identoro_users AS
-                      SELECT user_id, user_name AS username, passwd AS password, mail AS email, is_verified AS verified, verification_token, signin_count, created_at
+                      SELECT user_id, user_name AS username, passwd AS password, mail AS email, is_verified AS verified, verification_token, signin_count, unsuccessful_signins, created_at
                       FROM actual_users_table;
 
                       CREATE RULE insert_identoro_users AS
                       ON INSERT TO identoro_users
                       DO INSTEAD
-                      INSERT INTO actual_users_table (user_name, passwd, mail, verification_token, signin_count, created_at)
-                      VALUES (NEW.username, NEW.password, NEW.email, NEW.verification_token, NEW.signin_count, NEW.created_at);
+                      INSERT INTO actual_users_table (user_name, passwd, mail, verification_token, signin_count, unsuccessful_signins, created_at)
+                      VALUES (NEW.username, NEW.password, NEW.email, NEW.verification_token, NEW.signin_count, NEW.unsuccessful_signins, NEW.created_at);
 
                       CREATE RULE update_identoro_users AS
                       ON UPDATE TO identoro_users
@@ -297,6 +324,7 @@ func printConfig(config *Config) {
                           is_verified = NEW.verified,
                           verification_token = NEW.verification_token,
                           signin_count = NEW.signin_count,
+                          unsuccessful_signins = NEW.unsuccessful_signins,
                           created_at = NEW.created_at
                       WHERE user_id = NEW.user_id;`)
 
@@ -309,6 +337,7 @@ func printConfig(config *Config) {
                       is_verified BOOLEAN NOT NULL DEFAULT FALSE,
                       verification_token VARCHAR(50),
                       signin_count INTEGER NOT NULL DEFAULT 0,
+                      unsuccessful_signins INTEGER NOT NULL DEFAULT 0,
                       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
                   );`)
     }
@@ -558,6 +587,9 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
         return
     }
     if r.Method == http.MethodPost {
+        // Delay added to slow down automated signin attempts
+        time.Sleep(2 * time.Second)
+
         username := r.FormValue("username")
         password := r.FormValue("password")
 
@@ -592,6 +624,7 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
 
         user, err := db.GetUserByUsername(username)
         if err != nil {
+            db.IncrementUnsuccessfulSignins(username)
             if r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusUnauthorized, "Invalid credentials", nil)
             } else {
@@ -610,6 +643,7 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
         }
 
         if bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password)) != nil {
+            db.IncrementUnsuccessfulSignins(username)
             if r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusUnauthorized, "Invalid credentials", nil)
             } else {
@@ -617,6 +651,9 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
             }
             return
         }
+
+        // Reset unsuccessful_signins
+        db.ResetUnsuccessfulSignins(username)
 
         // Increment signin_count
         err = db.IncrementSigninCount(user.UserID)
@@ -657,7 +694,7 @@ func forgotHandler(w http.ResponseWriter, r *http.Request) {
     if r.Method == http.MethodPost {
         email := r.FormValue("email")
 
-        if !isValidEmail(email) {
+        if (!isValidEmail(email) {
             if r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusBadRequest, "Invalid email", nil)
             } else {
