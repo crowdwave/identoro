@@ -96,48 +96,48 @@ func (db *PostgresDB) Open() error {
 }
 
 func (db *PostgresDB) CreateUser(username, password, email, verificationToken string) error {
-    if !dbAvailable {
+    if (!dbAvailable) {
         return fmt.Errorf("database not available")
     }
-    query := `INSERT INTO users (username, password, email, verification_token) VALUES ($1, $2, $3, $4)`
+    query := `INSERT INTO identoro_users (username, password, email, verification_token) VALUES ($1, $2, $3, $4)`
     _, err := db.pool.Exec(context.Background(), query, username, password, email, verificationToken)
     return err
 }
 
 func (db *PostgresDB) GetUserByUsername(username string) (User, error) {
     var user User
-    if !dbAvailable {
+    if (!dbAvailable) {
         return user, fmt.Errorf("database not available")
     }
-    query := `SELECT id, username, password, email, reset_token, verified, verification_token FROM users WHERE username = $1`
+    query := `SELECT id, username, password, email, reset_token, verified, verification_token FROM identoro_users WHERE username = $1`
     row := db.pool.QueryRow(context.Background(), query, username)
     err := row.Scan(&user.ID, &user.Username, &user.Password, &user.Email, &user.ResetToken, &user.Verified, &user.VerificationToken)
     return user, err
 }
 
 func (db *PostgresDB) UpdateUserVerification(token string) error {
-    if !dbAvailable {
+    if (!dbAvailable) {
         return fmt.Errorf("database not available")
     }
-    query := `UPDATE users SET verified = TRUE, verification_token = NULL WHERE verification_token = $1`
+    query := `UPDATE identoro_users SET verified = TRUE, verification_token = NULL WHERE verification_token = $1`
     _, err := db.pool.Exec(context.Background(), query, token)
     return err
 }
 
 func (db *PostgresDB) UpdateUserResetToken(email, resetToken string) error {
-    if !dbAvailable {
+    if (!dbAvailable) {
         return fmt.Errorf("database not available")
     }
-    query := `UPDATE users SET reset_token = $1 WHERE email = $2`
+    query := `UPDATE identoro_users SET reset_token = $1 WHERE email = $2`
     _, err := db.pool.Exec(context.Background(), query, resetToken, email)
     return err
 }
 
 func (db *PostgresDB) UpdateUserPassword(token, hashedPassword string) error {
-    if !dbAvailable {
+    if (!dbAvailable) {
         return fmt.Errorf("database not available")
     }
-    query := `UPDATE users SET password = $1, reset_token = NULL WHERE reset_token = $2`
+    query := `UPDATE identoro_users SET password = $1, reset_token = NULL WHERE reset_token = $2`
     _, err := db.pool.Exec(context.Background(), query, hashedPassword, token)
     return err
 }
@@ -196,12 +196,12 @@ func (db *SQLiteDB) TestConnection() error {
 
 func loadConfig() (*Config, error) {
     err := godotenv.Load()
-    if err != nil {
+    if (err != nil) {
         return nil, fmt.Errorf("error loading .env file: %v", err)
     }
 
     smtpPort, err := strconv.Atoi(os.Getenv("SMTP_PORT"))
-    if err != nil {
+    if (err != nil) {
         return nil, fmt.Errorf("invalid SMTP_PORT value in .env file")
     }
 
@@ -237,16 +237,22 @@ func printConfig(config *Config) {
     fmt.Printf("  RECAPTCHA_SITE_KEY: %s\n", config.RecaptchaSiteKey)
     fmt.Printf("  RECAPTCHA_SECRET_KEY: %s\n", maskString(config.RecaptchaSecretKey))
 
-    if config.DbType == "postgres" {
+    if (config.DbType == "postgres") {
         fmt.Println("\nExample SQL for creating an updatable view for PostgreSQL:")
-        fmt.Println(`CREATE VIEW user_view AS
+        fmt.Println(`CREATE VIEW identoro_users AS
                       SELECT id, user_name AS username, passwd AS password, mail AS email, reset_token, is_verified AS verified, verification_token
-                      FROM old_users_table;
+                      FROM actual_users_table;
 
-                      CREATE RULE update_user_view AS
-                      ON UPDATE TO user_view
+                      CREATE RULE insert_identoro_users AS
+                      ON INSERT TO identoro_users
                       DO INSTEAD
-                      UPDATE old_users_table
+                      INSERT INTO actual_users_table (user_name, passwd, mail, verification_token)
+                      VALUES (NEW.username, NEW.password, NEW.email, NEW.verification_token);
+
+                      CREATE RULE update_identoro_users AS
+                      ON UPDATE TO identoro_users
+                      DO INSTEAD
+                      UPDATE actual_users_table
                       SET user_name = NEW.username,
                           passwd = NEW.password,
                           mail = NEW.email,
@@ -284,11 +290,11 @@ func errorResponse(w http.ResponseWriter, statusCode int, message string) {
 func main() {
     var err error
     config, err = loadConfig()
-    if err != nil {
+    if (err != nil) {
         log.Fatal(err)
     }
 
-    switch config.DbType {
+    switch (config.DbType) {
     case "postgres":
         db = &PostgresDB{connStr: config.ConnStr}
     case "sqlite":
@@ -301,7 +307,7 @@ func main() {
     go func() {
         for {
             err := db.Open()
-            if err == nil {
+            if (err == nil) {
                 log.Println("Connected to the database")
                 dbAvailable = true
                 return
@@ -375,7 +381,7 @@ func logRequest(handler http.Handler) http.Handler {
 }
 
 func homeHandler(w http.ResponseWriter, r *http.Request) {
-    if !dbAvailable {
+    if (!dbAvailable) {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
@@ -396,18 +402,18 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func signupHandler(w http.ResponseWriter, r *http.Request) {
-    if !dbAvailable {
+    if (!dbAvailable) {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
-    if r.Method == http.MethodPost {
+    if (r.Method == http.MethodPost) {
         username := r.FormValue("username")
         email := r.FormValue("email")
         password := r.FormValue("password")
         recaptchaResponse := r.FormValue("g-recaptcha-response")
 
-        if !isValidUsername(username) || !isValidEmail(email) || !isValidPassword(password) {
-            if r.Header.Get("Content-Type") == "application/json" {
+        if (!isValidUsername(username) || !isValidEmail(email) || !isValidPassword(password)) {
+            if (r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusBadRequest, "Invalid input", nil)
             } else {
                 errorResponse(w, http.StatusBadRequest, "Invalid input")
@@ -415,8 +421,8 @@ func signupHandler(w http.ResponseWriter, r *http.Request) {
             return
         }
 
-        if !verifyRecaptcha(recaptchaResponse) {
-            if r.Header.Get("Content-Type") == "application/json") {
+        if (!verifyRecaptcha(recaptchaResponse)) {
+            if (r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusBadRequest, "Invalid reCAPTCHA", nil)
             } else {
                 errorResponse(w, http.StatusBadRequest, "Invalid reCAPTCHA")
@@ -427,8 +433,8 @@ func signupHandler(w http.ResponseWriter, r *http.Request) {
         hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
         verificationToken := generateToken()
         err := db.CreateUser(username, string(hashedPassword), email, verificationToken)
-        if err != nil {
-            if r.Header.Get("Content-Type") == "application/json") {
+        if (err != nil) {
+            if (r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusBadRequest, "Username or email already exists", nil)
             } else {
                 errorResponse(w, http.StatusBadRequest, "Username or email already exists")
@@ -440,7 +446,7 @@ func signupHandler(w http.ResponseWriter, r *http.Request) {
         emailBody := fmt.Sprintf("Please click the following link to verify your account: %s", verificationURL)
         sendEmail(email, "Verify your account", emailBody)
 
-        if r.Header.Get("Content-Type") == "application/json") {
+        if (r.Header.Get("Content-Type") == "application/json") {
             jsonResponse(w, http.StatusSeeOther, "Signup successful, please verify your email", nil)
         } else {
             http.Redirect(w, r, "/signin", http.StatusSeeOther)
@@ -453,16 +459,16 @@ func signupHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func signinHandler(w http.ResponseWriter, r *http.Request) {
-    if !dbAvailable {
+    if (!dbAvailable) {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
-    if r.Method == http.MethodPost {
+    if (r.Method == http.MethodPost) {
         username := r.FormValue("username")
         password := r.FormValue("password")
 
-        if !isValidUsername(username) || !isValidPassword(password) {
-            if r.Header.Get("Content-Type") == "application/json") {
+        if (!isValidUsername(username) || !isValidPassword(password)) {
+            if (r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusBadRequest, "Invalid input", nil)
             } else {
                 errorResponse(w, http.StatusBadRequest, "Invalid input")
@@ -478,9 +484,9 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
             currentEpochHour = epochHour
         }
         attempts := loginAttemptsByAccount[username]
-        if attempts >= loginMaxPerHour {
+        if (attempts >= loginMaxPerHour) {
             loginLock.Unlock()
-            if r.Header.Get("Content-Type") == "application/json") {
+            if (r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusTooManyRequests, "Too many login attempts", nil)
             } else {
                 errorResponse(w, http.StatusTooManyRequests, "Too many login attempts")
@@ -491,8 +497,8 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
         loginLock.Unlock()
 
         user, err := db.GetUserByUsername(username)
-        if err != nil {
-            if r.Header.Get("Content-Type") == "application/json") {
+        if (err != nil) {
+            if (r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusUnauthorized, "Invalid credentials", nil)
             } else {
                 errorResponse(w, http.StatusUnauthorized, "Invalid credentials")
@@ -500,8 +506,8 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
             return
         }
 
-        if !user.Verified {
-            if r.Header.Get("Content-Type") == "application/json") {
+        if (!user.Verified) {
+            if (r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusUnauthorized, "Account not verified", nil)
             } else {
                 errorResponse(w, http.StatusUnauthorized, "Account not verified")
@@ -509,8 +515,8 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
             return
         }
 
-        if bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password)) != nil {
-            if r.Header.Get("Content-Type") == "application/json") {
+        if (bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password)) != nil) {
+            if (r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusUnauthorized, "Invalid credentials", nil)
             } else {
                 errorResponse(w, http.StatusUnauthorized, "Invalid credentials")
@@ -522,7 +528,7 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
         session.Values["username"] = username
         session.Save(r, w)
 
-        if r.Header.Get("Content-Type") == "application/json") {
+        if (r.Header.Get("Content-Type") == "application/json") {
             jsonResponse(w, http.StatusSeeOther, "Signin successful", nil)
         } else {
             http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -536,7 +542,7 @@ func signoutHandler(w http.ResponseWriter, r *http.Request) {
     session, _ := store.Get(r, "session")
     delete(session.Values, "username")
     session.Save(r, w)
-    if r.Header.Get("Content-Type") == "application/json") {
+    if (r.Header.Get("Content-Type") == "application/json") {
         jsonResponse(w, http.StatusOK, "Signout successful", nil)
     } else {
         http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -544,15 +550,15 @@ func signoutHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func forgotHandler(w http.ResponseWriter, r *http.Request) {
-    if !dbAvailable {
+    if (!dbAvailable) {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
-    if r.Method == http.MethodPost {
+    if (r.Method == http.MethodPost) {
         email := r.FormValue("email")
 
-        if !isValidEmail(email) {
-            if r.Header.Get("Content-Type") == "application/json") {
+        if (!isValidEmail(email)) {
+            if (r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusBadRequest, "Invalid email", nil)
             } else {
                 errorResponse(w, http.StatusBadRequest, "Invalid email")
@@ -562,8 +568,8 @@ func forgotHandler(w http.ResponseWriter, r *http.Request) {
 
         resetToken := generateToken()
         err := db.UpdateUserResetToken(email, resetToken)
-        if err != nil {
-            if r.Header.Get("Content-Type") == "application/json") {
+        if (err != nil) {
+            if (r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusBadRequest, "Invalid email", nil)
             } else {
                 errorResponse(w, http.StatusBadRequest, "Invalid email")
@@ -575,7 +581,7 @@ func forgotHandler(w http.ResponseWriter, r *http.Request) {
         emailBody := fmt.Sprintf("Click the link to reset your password: %s", resetURL)
         sendEmail(email, "Reset your password", emailBody)
 
-        if r.Header.Get("Content-Type") == "application/json") {
+        if (r.Header.Get("Content-Type") == "application/json") {
             jsonResponse(w, http.StatusSeeOther, "Password reset email sent", nil)
         } else {
             http.Redirect(w, r, "/signin", http.StatusSeeOther)
@@ -586,16 +592,16 @@ func forgotHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func resetHandler(w http.ResponseWriter, r *http.Request) {
-    if !dbAvailable {
+    if (!dbAvailable) {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
-    if r.Method == http.MethodPost {
+    if (r.Method == http.MethodPost) {
         token := r.FormValue("token")
         newPassword := r.FormValue("new_password")
 
-        if !isValidPassword(newPassword) {
-            if r.Header.Get("Content-Type") == "application/json") {
+        if (!isValidPassword(newPassword)) {
+            if (r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusBadRequest, "Invalid input", nil)
             } else {
                 errorResponse(w, http.StatusBadRequest, "Invalid input")
@@ -605,8 +611,8 @@ func resetHandler(w http.ResponseWriter, r *http.Request) {
 
         hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
         err := db.UpdateUserPassword(token, string(hashedPassword))
-        if err != nil {
-            if r.Header.Get("Content-Type") == "application/json") {
+        if (err != nil) {
+            if (r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusBadRequest, "Invalid token", nil)
             } else {
                 errorResponse(w, http.StatusBadRequest, "Invalid token")
@@ -614,7 +620,7 @@ func resetHandler(w http.ResponseWriter, r *http.Request) {
             return
         }
 
-        if r.Header.Get("Content-Type") == "application/json") {
+        if (r.Header.Get("Content-Type") == "application/json") {
             jsonResponse(w, http.StatusSeeOther, "Password reset successful", nil)
         } else {
             http.Redirect(w, r, "/signin", http.StatusSeeOther)
@@ -625,14 +631,14 @@ func resetHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func verifyHandler(w http.ResponseWriter, r *http.Request) {
-    if !dbAvailable {
+    if (!dbAvailable) {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
     token := r.URL.Query().Get("token")
     err := db.UpdateUserVerification(token)
-    if err != nil {
-        if r.Header.Get("Content-Type") == "application/json") {
+    if (err != nil) {
+        if (r.Header.Get("Content-Type") == "application/json") {
             jsonResponse(w, http.StatusBadRequest, "Invalid token", nil)
         } else {
             errorResponse(w, http.StatusBadRequest, "Invalid token")
@@ -640,7 +646,7 @@ func verifyHandler(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    if r.Header.Get("Content-Type") == "application/json") {
+    if (r.Header.Get("Content-Type") == "application/json") {
         jsonResponse(w, http.StatusSeeOther, "Account verified", nil)
     } else {
         http.Redirect(w, r, "/signin", http.StatusSeeOther)
@@ -663,7 +669,7 @@ func sendEmail(to, subject, body string) {
 
     d := gomail.NewDialer(config.SmtpHost, config.SmtpPort, config.EmailSender, config.EmailPassword)
 
-    if err := d.DialAndSend(m); err != nil {
+    if (err := d.DialAndSend(m); err != nil) {
         log.Fatal(err)
     }
 }
