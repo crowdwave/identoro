@@ -195,29 +195,62 @@ func loadConfig() (*Config, error) {
         return nil, fmt.Errorf("error loading .env file: %v", err)
     }
 
+    requiredEnvVars := []string{
+        "DB_TYPE", "DATABASE_URL", "SECRET_KEY", "EMAIL_SENDER", "EMAIL_PASSWORD",
+        "SMTP_HOST", "SMTP_PORT", "WEB_SERVER_ADDRESS", "EMAIL_REPLY_TO",
+        "RECAPTCHA_SITE_KEY", "RECAPTCHA_SECRET_KEY", "USER", "GROUP", "HASH_KEY",
+    }
+
+    for _, envVar := range requiredEnvVars {
+        if os.Getenv(envVar) == "" {
+            return nil, fmt.Errorf("%s is not set in the environment variables", envVar)
+        }
+    }
+
     smtpPort, err := strconv.Atoi(os.Getenv("SMTP_PORT"))
     if err != nil {
         return nil, fmt.Errorf("invalid SMTP_PORT value in .env file")
     }
 
+    // Additional validation for specific variables
+    if !isValidEmail(os.Getenv("EMAIL_SENDER")) {
+        return nil, fmt.Errorf("invalid EMAIL_SENDER value in .env file")
+    }
+    if !isValidURL(os.Getenv("WEB_SERVER_ADDRESS")) {
+        return nil, fmt.Errorf("invalid WEB_SERVER_ADDRESS value in .env file")
+    }
+    if !isValidEmail(os.Getenv("EMAIL_REPLY_TO")) {
+        return nil, fmt.Errorf("invalid EMAIL_REPLY_TO value in .env file")
+    }
+
     config := &Config{
-        DbType:            os.Getenv("DB_TYPE"),
-        ConnStr:           os.Getenv("DATABASE_URL"),
-        SecretKey:         os.Getenv("SECRET_KEY"),
-        EmailSender:       os.Getenv("EMAIL_SENDER"),
-        EmailPassword:     os.Getenv("EMAIL_PASSWORD"),
-        SmtpHost:          os.Getenv("SMTP_HOST"),
-        SmtpPort:          smtpPort,
-        WebServerAddress:  os.Getenv("WEB_SERVER_ADDRESS"),
-        EmailReplyTo:      os.Getenv("EMAIL_REPLY_TO"),
-        RecaptchaSiteKey:  os.Getenv("RECAPTCHA_SITE_KEY"),
+        DbType:             os.Getenv("DB_TYPE"),
+        ConnStr:            os.Getenv("DATABASE_URL"),
+        SecretKey:          os.Getenv("SECRET_KEY"),
+        EmailSender:        os.Getenv("EMAIL_SENDER"),
+        EmailPassword:      os.Getenv("EMAIL_PASSWORD"),
+        SmtpHost:           os.Getenv("SMTP_HOST"),
+        SmtpPort:           smtpPort,
+        WebServerAddress:   os.Getenv("WEB_SERVER_ADDRESS"),
+        EmailReplyTo:       os.Getenv("EMAIL_REPLY_TO"),
+        RecaptchaSiteKey:   os.Getenv("RECAPTCHA_SITE_KEY"),
         RecaptchaSecretKey: os.Getenv("RECAPTCHA_SECRET_KEY"),
-        User:              os.Getenv("USER"),
-        Group:             os.Getenv("GROUP"),
-        HashKey:           os.Getenv("HASH_KEY"),
+        User:               os.Getenv("USER"),
+        Group:              os.Getenv("GROUP"),
+        HashKey:            os.Getenv("HASH_KEY"),
     }
 
     return config, nil
+}
+
+func isValidEmail(email string) bool {
+    re := regexp.MustCompile(`^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,4}$`)
+    return re.MatchString(email)
+}
+
+func isValidURL(url string) bool {
+    re := regexp.MustCompile(`^https?://[a-zA-Z0-9\-._~:/?#[\]@!$&'()*+,;=]+$`)
+    return re.MatchString(url)
 }
 
 func loadHashKey() ([]byte, error) {
@@ -232,7 +265,7 @@ func printConfig(config *Config) {
     fmt.Println("Server Version:", version)
     fmt.Println("Configuration:")
     fmt.Printf("  DB_TYPE: %s\n", config.DbType)
-    fmt.Printf("  DATABASE_URL: %s\n", config.ConnStr)
+    fmt.Printf("  DATABASE_URL: %s\n", maskString(config.ConnStr))
     fmt.Printf("  SECRET_KEY: %s\n", maskString(config.SecretKey))
     fmt.Printf("  EMAIL_SENDER: %s\n", config.EmailSender)
     fmt.Printf("  EMAIL_PASSWORD: %s\n", maskString(config.EmailPassword))
