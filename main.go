@@ -74,6 +74,8 @@ type User struct {
     Email             string
     Verified          bool
     VerificationToken sql.NullString
+    SigninCount       int
+    CreatedAt         time.Time
 }
 
 type Database interface {
@@ -82,6 +84,7 @@ type Database interface {
     GetUserByUsername(username string) (User, error)
     UpdateUserVerification(token string) error
     UpdateUserPasswordByEmail(email, hashedPassword string) error
+    IncrementSigninCount(userID string) error
     TestConnection() error
 }
 
@@ -108,7 +111,7 @@ func (db *PostgresDB) CreateUser(username, password, email, verificationToken st
         return fmt.Errorf("database not available")
     }
     userID := uuid.New().String()
-    query := `INSERT INTO identoro_users (user_id, username, password, email, verification_token) VALUES ($1, $2, $3, $4, $5)`
+    query := `INSERT INTO identoro_users (user_id, username, password, email, verification_token, signin_count, created_at) VALUES ($1, $2, $3, $4, $5, 0, CURRENT_TIMESTAMP)`
     _, err := db.pool.Exec(context.Background(), query, userID, username, password, email, verificationToken)
     return err
 }
@@ -118,9 +121,9 @@ func (db *PostgresDB) GetUserByUsername(username string) (User, error) {
     if !dbAvailable {
         return user, fmt.Errorf("database not available")
     }
-    query := `SELECT user_id, username, password, email, verified, verification_token FROM identoro_users WHERE username = $1`
+    query := `SELECT user_id, username, password, email, verified, verification_token, signin_count, created_at FROM identoro_users WHERE username = $1`
     row := db.pool.QueryRow(context.Background(), query, username)
-    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Verified, &user.VerificationToken)
+    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Verified, &user.VerificationToken, &user.SigninCount, &user.CreatedAt)
     return user, err
 }
 
@@ -142,6 +145,12 @@ func (db *PostgresDB) UpdateUserPasswordByEmail(email, hashedPassword string) er
     return err
 }
 
+func (db *PostgresDB) IncrementSigninCount(userID string) error {
+    query := `UPDATE identoro_users SET signin_count = signin_count + 1 WHERE user_id = $1`
+    _, err := db.pool.Exec(context.Background(), query, userID)
+    return err
+}
+
 func (db *PostgresDB) TestConnection() error {
     var result int
     return db.pool.QueryRow(context.Background(), "SELECT 1").Scan(&result)
@@ -160,16 +169,16 @@ func (db *SQLiteDB) Open() error {
 
 func (db *SQLiteDB) CreateUser(username, password, email, verificationToken string) error {
     userID := uuid.New().String()
-    query := `INSERT INTO identoro_users (user_id, username, password, email, verification_token) VALUES (?, ?, ?, ?, ?)`
+    query := `INSERT INTO identoro_users (user_id, username, password, email, verification_token, signin_count, created_at) VALUES (?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP)`
     _, err := db.db.Exec(query, userID, username, password, email, verificationToken)
     return err
 }
 
 func (db *SQLiteDB) GetUserByUsername(username string) (User, error) {
     var user User
-    query := `SELECT user_id, username, password, email, verified, verification_token FROM identoro_users WHERE username = ?`
+    query := `SELECT user_id, username, password, email, verified, verification_token, signin_count, created_at FROM identoro_users WHERE username = ?`
     row := db.db.QueryRow(query, username)
-    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Verified, &user.VerificationToken)
+    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Verified, &user.VerificationToken, &user.SigninCount, &user.CreatedAt)
     return user, err
 }
 
@@ -182,6 +191,12 @@ func (db *SQLiteDB) UpdateUserVerification(token string) error {
 func (db *SQLiteDB) UpdateUserPasswordByEmail(email, hashedPassword string) error {
     query := `UPDATE identoro_users SET password = ? WHERE email = ?`
     _, err := db.db.Exec(query, hashedPassword, email)
+    return err
+}
+
+func (db *SQLiteDB) IncrementSigninCount(userID string) error {
+    query := `UPDATE identoro_users SET signin_count = signin_count + 1 WHERE user_id = ?`
+    _, err := db.db.Exec(query, userID)
     return err
 }
 
@@ -263,14 +278,14 @@ func printConfig(config *Config) {
     if config.DbType == "postgres" {
         fmt.Println("\nExample SQL for creating an updatable view for PostgreSQL:")
         fmt.Println(`CREATE VIEW identoro_users AS
-                      SELECT user_id, user_name AS username, passwd AS password, mail AS email, is_verified AS verified, verification_token
+                      SELECT user_id, user_name AS username, passwd AS password, mail AS email, is_verified AS verified, verification_token, signin_count, created_at
                       FROM actual_users_table;
 
                       CREATE RULE insert_identoro_users AS
                       ON INSERT TO identoro_users
                       DO INSTEAD
-                      INSERT INTO actual_users_table (user_name, passwd, mail, verification_token)
-                      VALUES (NEW.username, NEW.password, NEW.email, NEW.verification_token);
+                      INSERT INTO actual_users_table (user_name, passwd, mail, verification_token, signin_count, created_at)
+                      VALUES (NEW.username, NEW.password, NEW.email, NEW.verification_token, NEW.signin_count, NEW.created_at);
 
                       CREATE RULE update_identoro_users AS
                       ON UPDATE TO identoro_users
@@ -280,7 +295,9 @@ func printConfig(config *Config) {
                           passwd = NEW.password,
                           mail = NEW.email,
                           is_verified = NEW.verified,
-                          verification_token = NEW.verification_token
+                          verification_token = NEW.verification_token,
+                          signin_count = NEW.signin_count,
+                          created_at = NEW.created_at
                       WHERE user_id = NEW.user_id;`)
 
         fmt.Println("\nIf you do not already have a users table, you can use the following SQL to create it:")
@@ -290,7 +307,9 @@ func printConfig(config *Config) {
                       passwd VARCHAR(100) NOT NULL,
                       mail VARCHAR(100) NOT NULL,
                       is_verified BOOLEAN NOT NULL DEFAULT FALSE,
-                      verification_token VARCHAR(50)
+                      verification_token VARCHAR(50),
+                      signin_count INTEGER NOT NULL DEFAULT 0,
+                      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
                   );`)
     }
 }
@@ -597,6 +616,12 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
                 errorResponse(w, http.StatusUnauthorized, "Invalid credentials")
             }
             return
+        }
+
+        // Increment signin_count
+        err = db.IncrementSigninCount(user.UserID)
+        if err != nil {
+            log.Printf("Failed to increment signin count: %v", err)
         }
 
         session, _ := store.Get(r, "session")
