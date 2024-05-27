@@ -2,15 +2,16 @@ package main
 
 import (
     "context"
-    "crypto/rand"
     "database/sql"
     "encoding/base64"
     "encoding/json"
     "flag"
     "fmt"
     "html/template"
+    "io/ioutil"
     "log"
     "net/http"
+    "net/url"
     "os"
     "os/signal"
     "os/user"
@@ -664,7 +665,7 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
         user, err := db.GetUserByUsername(username)
         if err != nil {
             db.IncrementUnsuccessfulSignins(username)
-            if r.Header.Get("Content-Type") == "application/json") {
+            if r.Header.Get("Content-Type") == "application/json" {
                 jsonResponse(w, http.StatusUnauthorized, "Invalid credentials", nil)
             } else {
                 errorResponse(w, http.StatusUnauthorized, "Invalid credentials")
@@ -673,7 +674,7 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
         }
 
         if !user.Verified {
-            if r.Header.Get("Content-Type") == "application/json") {
+            if r.Header.Get("Content-Type") == "application/json" {
                 jsonResponse(w, http.StatusUnauthorized, "Account not verified", nil)
             } else {
                 errorResponse(w, http.StatusUnauthorized, "Account not verified")
@@ -683,7 +684,7 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
 
         if bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password)) != nil {
             db.IncrementUnsuccessfulSignins(username)
-            if r.Header.Get("Content-Type") == "application/json") {
+            if r.Header.Get("Content-Type") == "application/json" {
                 jsonResponse(w, http.StatusUnauthorized, "Invalid credentials", nil)
             } else {
                 errorResponse(w, http.StatusUnauthorized, "Invalid credentials")
@@ -931,6 +932,36 @@ func isValidPassword(password string) bool {
 func isValidURL(url string) bool {
     re := regexp.MustCompile(`^https?://[a-zA-Z0-9\-._~:/?#[\]@!$&'()*+,;=]+$`)
     return re.MatchString(url)
+}
+
+func verifyRecaptcha(response string) bool {
+    // This function verifies the reCAPTCHA response with Google
+    recaptchaURL := "https://www.google.com/recaptcha/api/siteverify"
+    form := url.Values{}
+    form.Add("secret", config.RecaptchaSecretKey)
+    form.Add("response", response)
+
+    resp, err := http.PostForm(recaptchaURL, form)
+    if err != nil {
+        log.Printf("Failed to verify reCAPTCHA: %v", err)
+        return false
+    }
+    defer resp.Body.Close()
+
+    body, err := ioutil.ReadAll(resp.Body)
+    if err != nil {
+        log.Printf("Failed to read reCAPTCHA response body: %v", err)
+        return false
+    }
+
+    var result map[string]interface{}
+    if err := json.Unmarshal(body, &result); err != nil {
+        log.Printf("Failed to unmarshal reCAPTCHA response: %v", err)
+        return false
+    }
+
+    success, ok := result["success"].(bool)
+    return ok && success
 }
 
 // isStaticallyLinked checks if the current binary is statically linked on Linux
