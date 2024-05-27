@@ -181,6 +181,7 @@ func (db *SQLiteDB) Open() error {
     return err
 }
 
+
 func (db *SQLiteDB) CreateUser(username, password, email string) error {
     userID := uuid.New().String()
     query := `INSERT INTO identoro_users (user_id, username, password, email, verified, signin_count, unsuccessful_signins, created_at) VALUES (?, ?, ?, ?, 0, 0, 0, CURRENT_TIMESTAMP)`
