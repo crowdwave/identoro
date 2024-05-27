@@ -63,6 +63,7 @@ type Config struct {
     EmailReplyTo           string
     RecaptchaSiteKey       string
     RecaptchaSecretKey     string
+    UseRecaptcha           bool
     User                   string
     Group                  string
     HashKey                string
@@ -273,6 +274,11 @@ func loadConfig() (*Config, error) {
         return nil, fmt.Errorf("invalid JWT_EXPIRATION_HOURS value in .env file")
     }
 
+    useRecaptcha, err := strconv.ParseBool(os.Getenv("USE_RECAPTCHA"))
+    if err != nil {
+        return nil, fmt.Errorf("invalid USE_RECAPTCHA value in .env file")
+    }
+
     config := &Config{
         DbType:                 os.Getenv("DB_TYPE"),
         ConnStr:                os.Getenv("DATABASE_URL"),
@@ -285,6 +291,7 @@ func loadConfig() (*Config, error) {
         EmailReplyTo:           os.Getenv("EMAIL_REPLY_TO"),
         RecaptchaSiteKey:       os.Getenv("RECAPTCHA_SITE_KEY"),
         RecaptchaSecretKey:     os.Getenv("RECAPTCHA_SECRET_KEY"),
+        UseRecaptcha:           useRecaptcha,
         User:                   os.Getenv("USER"),
         Group:                  os.Getenv("GROUP"),
         HashKey:                os.Getenv("HASH_KEY"),
@@ -342,6 +349,7 @@ func printConfig(config *Config) {
     fmt.Printf("  EMAIL_REPLY_TO: %s\n", config.EmailReplyTo)
     fmt.Printf("  RECAPTCHA_SITE_KEY: %s\n", config.RecaptchaSiteKey)
     fmt.Printf("  RECAPTCHA_SECRET_KEY: %s\n", maskString(config.RecaptchaSecretKey))
+    fmt.Printf("  USE_RECAPTCHA: %t\n", config.UseRecaptcha)
     fmt.Printf("  USER: %s\n", config.User)
     fmt.Printf("  GROUP: %s\n", config.Group)
     fmt.Printf("  HASH_KEY: %s\n", maskString(config.HashKey))
@@ -432,6 +440,7 @@ func displayHelp() {
     fmt.Println("  EMAIL_REPLY_TO: The reply-to email address for outgoing emails.")
     fmt.Println("  RECAPTCHA_SITE_KEY: The site key for reCAPTCHA.")
     fmt.Println("  RECAPTCHA_SECRET_KEY: The secret key for reCAPTCHA.")
+    fmt.Println("  USE_RECAPTCHA: Whether to use reCAPTCHA (true/false).")
     fmt.Println("  USER: The user name or ID for dropping privileges.")
     fmt.Println("  GROUP: The group name or ID for dropping privileges.")
     fmt.Println("  HASH_KEY: The secret hash key for generating secure tokens.")
@@ -604,7 +613,7 @@ func signupHandler(w http.ResponseWriter, r *http.Request) {
             return
         }
 
-        if !verifyRecaptcha(recaptchaResponse) {
+        if config.UseRecaptcha && !verifyRecaptcha(recaptchaResponse) {
             jsonResponse(w, http.StatusBadRequest, "Invalid reCAPTCHA", nil)
             return
         }
