@@ -87,11 +87,12 @@ type User struct {
     UnsuccessfulSignins int
     CreatedAt           time.Time
     RefreshToken        string
+    Extensions          string // JSON field for extensions
 }
 
 type Database interface {
     Open() error
-    CreateUser(username, password, email, firstname, lastname string) error
+    CreateUser(username, password, email, firstname, lastname string, extensions map[string]interface{}) error
     GetUserByUsername(username string) (User, error)
     GetUserByID(userID string) (User, error)
     UpdateUserVerification(email string) error
@@ -122,13 +123,17 @@ func (db *PostgresDB) Open() error {
     return err
 }
 
-func (db *PostgresDB) CreateUser(username, password, email, firstname, lastname string) error {
+func (db *PostgresDB) CreateUser(username, password, email, firstname, lastname string, extensions map[string]interface{}) error {
     if !dbAvailable {
         return fmt.Errorf("database not available")
     }
     userID := uuid.New().String()
-    query := `INSERT INTO identoro_users (user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at, refresh_token) VALUES ($1, $2, $3, $4, $5, $6, FALSE, 0, 0, CURRENT_TIMESTAMP, '')`
-    _, err := db.pool.Exec(context.Background(), query, userID, username, password, email, firstname, lastname)
+    extensionsJSON, err := json.Marshal(extensions)
+    if err != nil {
+        return err
+    }
+    query := `INSERT INTO identoro_users (user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at, refresh_token, extensions) VALUES ($1, $2, $3, $4, $5, $6, FALSE, 0, 0, CURRENT_TIMESTAMP, '', $7)`
+    _, err = db.pool.Exec(context.Background(), query, userID, username, password, email, firstname, lastname, extensionsJSON)
     return err
 }
 
@@ -137,9 +142,9 @@ func (db *PostgresDB) GetUserByUsername(username string) (User, error) {
     if !dbAvailable {
         return user, fmt.Errorf("database not available")
     }
-    query := `SELECT user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at, refresh_token FROM identoro_users WHERE username = $1`
+    query := `SELECT user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at, refresh_token, extensions FROM identoro_users WHERE username = $1`
     row := db.pool.QueryRow(context.Background(), query, username)
-    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Firstname, &user.Lastname, &user.Verified, &user.SigninCount, &user.UnsuccessfulSignins, &user.CreatedAt, &user.RefreshToken)
+    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Firstname, &user.Lastname, &user.Verified, &user.SigninCount, &user.UnsuccessfulSignins, &user.CreatedAt, &user.RefreshToken, &user.Extensions)
     return user, err
 }
 
@@ -148,9 +153,9 @@ func (db *PostgresDB) GetUserByID(userID string) (User, error) {
     if !dbAvailable {
         return user, fmt.Errorf("database not available")
     }
-    query := `SELECT user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at, refresh_token FROM identoro_users WHERE user_id = $1`
+    query := `SELECT user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at, refresh_token, extensions FROM identoro_users WHERE user_id = $1`
     row := db.pool.QueryRow(context.Background(), query, userID)
-    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Firstname, &user.Lastname, &user.Verified, &user.SigninCount, &user.UnsuccessfulSignins, &user.CreatedAt, &user.RefreshToken)
+    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Firstname, &user.Lastname, &user.Verified, &user.SigninCount, &user.UnsuccessfulSignins, &user.CreatedAt, &user.RefreshToken, &user.Extensions)
     return user, err
 }
 
@@ -220,26 +225,30 @@ func (db *SQLiteDB) Open() error {
     return err
 }
 
-func (db *SQLiteDB) CreateUser(username, password, email, firstname, lastname string) error {
+func (db *SQLiteDB) CreateUser(username, password, email, firstname, lastname string, extensions map[string]interface{}) error {
     userID := uuid.New().String()
-    query := `INSERT INTO identoro_users (user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at, refresh_token) VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, CURRENT_TIMESTAMP, '')`
-    _, err := db.db.Exec(query, userID, username, password, email, firstname, lastname)
+    extensionsJSON, err := json.Marshal(extensions)
+    if err != nil {
+        return err
+    }
+    query := `INSERT INTO identoro_users (user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at, refresh_token, extensions) VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, CURRENT_TIMESTAMP, '', ?)`
+    _, err = db.db.Exec(query, userID, username, password, email, firstname, lastname, extensionsJSON)
     return err
 }
 
 func (db *SQLiteDB) GetUserByUsername(username string) (User, error) {
     var user User
-    query := `SELECT user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at, refresh_token FROM identoro_users WHERE username = ?`
+    query := `SELECT user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at, refresh_token, extensions FROM identoro_users WHERE username = ?`
     row := db.db.QueryRow(query, username)
-    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Firstname, &user.Lastname, &user.Verified, &user.SigninCount, &user.UnsuccessfulSignins, &user.CreatedAt, &user.RefreshToken)
+    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Firstname, &user.Lastname, &user.Verified, &user.SigninCount, &user.UnsuccessfulSignins, &user.CreatedAt, &user.RefreshToken, &user.Extensions)
     return user, err
 }
 
 func (db *SQLiteDB) GetUserByID(userID string) (User, error) {
     var user User
-    query := `SELECT user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at, refresh_token FROM identoro_users WHERE user_id = ?`
+    query := `SELECT user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at, refresh_token, extensions FROM identoro_users WHERE user_id = ?`
     row := db.db.QueryRow(query, userID)
-    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Firstname, &user.Lastname, &user.Verified, &user.SigninCount, &user.UnsuccessfulSignins, &user.CreatedAt, &user.RefreshToken)
+    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Firstname, &user.Lastname, &user.Verified, &user.SigninCount, &user.UnsuccessfulSignins, &user.CreatedAt, &user.RefreshToken, &user.Extensions)
     return user, err
 }
 
@@ -423,14 +432,14 @@ func printConfig(config *Config) {
     if config.DbType == "postgres" {
         fmt.Println("\nExample SQL for creating an updatable view for PostgreSQL:")
         fmt.Println(`CREATE VIEW identoro_users AS
-                      SELECT user_id, user_name AS username, passwd AS password, mail AS email, first_name AS firstname, last_name AS lastname, is_verified AS verified, signin_count, unsuccessful_signins, created_at
+                      SELECT user_id, user_name AS username, passwd AS password, mail AS email, first_name AS firstname, last_name AS lastname, is_verified AS verified, signin_count, unsuccessful_signins, created_at, extensions
                       FROM actual_users_table;
 
                       CREATE RULE insert_identoro_users AS
                       ON INSERT TO identoro_users
                       DO INSTEAD
-                      INSERT INTO actual_users_table (user_name, passwd, mail, first_name, last_name, is_verified, signin_count, unsuccessful_signins, created_at)
-                      VALUES (NEW.username, NEW.password, NEW.email, NEW.firstname, NEW.lastname, NEW.verified, NEW.signin_count, NEW.unsuccessful_signins, NEW.created_at);
+                      INSERT INTO actual_users_table (user_name, passwd, mail, first_name, last_name, is_verified, signin_count, unsuccessful_signins, created_at, extensions)
+                      VALUES (NEW.username, NEW.password, NEW.email, NEW.firstname, NEW.lastname, NEW.verified, NEW.signin_count, NEW.unsuccessful_signins, NEW.created_at, NEW.extensions);
 
                       CREATE RULE update_identoro_users AS
                       ON UPDATE TO identoro_users
@@ -444,7 +453,8 @@ func printConfig(config *Config) {
                           is_verified = NEW.verified,
                           signin_count = NEW.signin_count,
                           unsuccessful_signins = NEW.unsuccessful_signins,
-                          created_at = NEW.created_at
+                          created_at = NEW.created_at,
+                          extensions = NEW.extensions
                       WHERE user_id = NEW.user_id;`)
 
         fmt.Println("\nIf you do not already have a users table, you can use the following SQL to create it:")
@@ -458,7 +468,8 @@ func printConfig(config *Config) {
                       is_verified BOOLEAN NOT NULL DEFAULT FALSE,
                       signin_count INTEGER NOT NULL DEFAULT 0,
                       unsuccessful_signins INTEGER NOT NULL DEFAULT 0,
-                      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                      extensions JSONB
                   );`)
     }
 }
@@ -491,27 +502,27 @@ func displayHelp() {
     fmt.Println("Usage: go run main.go [--help]")
     fmt.Println()
     fmt.Println("Environment Variables:")
-    fmt.Println("  DB_TYPE: The type of database to use (e.g., postgres, sqlite).")
-    fmt.Println("  DATABASE_URL: The connection string for the database.")
-    fmt.Println("  SECRET_KEY: The secret key for session management.")
-    fmt.Println("  EMAIL_SENDER: The email address to send emails from.")
-    fmt.Println("  EMAIL_PASSWORD: The password for the email sender.")
-    fmt.Println("  SMTP_HOST: The SMTP host for sending emails.")
-    fmt.Println("  SMTP_PORT: The SMTP port for sending emails.")
-    fmt.Println("  WEB_SERVER_ADDRESS: The address where the web server will be hosted.")
-    fmt.Println("  EMAIL_REPLY_TO: The reply-to email address for outgoing emails.")
-    fmt.Println("  RECAPTCHA_SITE_KEY: The site key for reCAPTCHA.")
-    fmt.Println("  RECAPTCHA_SECRET_KEY: The secret key for reCAPTCHA.")
-    fmt.Println("  USE_RECAPTCHA: Whether to use reCAPTCHA (true/false). Default is false.")
-    fmt.Println("  USER: The user name or ID for dropping privileges.")
-    fmt.Println("  GROUP: The group name or ID for dropping privileges.")
-    fmt.Println("  HASH_KEY: The secret hash key for generating secure tokens.")
-    fmt.Println("  REQUIRE_FIRST_AND_LAST_NAME: Whether firstname and lastname are required (true/false).")
-    fmt.Println("  USE_JWT_AUTH: Whether to use JWT authentication (true/false). Default is false.")
-    fmt.Println("  JWT_SECRET: The secret key for signing JWTs.")
-    fmt.Println("  JWT_EXPIRATION_HOURS: The expiration time for JWTs in hours.")
-    fmt.Println("  REFRESH_TOKEN_SECRET: The secret key for signing refresh tokens.")
-    fmt.Println("  REFRESH_TOKEN_EXPIRATION_HOURS: The expiration time for refresh tokens in hours.")
+    fmt.Println("  DB_TYPE: The type of database to use. Valid values are 'postgres' and 'sqlite'. (Default: none, required)")
+    fmt.Println("  DATABASE_URL: The connection string for the database. (Default: none, required)")
+    fmt.Println("  SECRET_KEY: The secret key for session management. (Default: none, required)")
+    fmt.Println("  EMAIL_SENDER: The email address to send emails from. (Default: none, required)")
+    fmt.Println("  EMAIL_PASSWORD: The password for the email sender. (Default: none, required)")
+    fmt.Println("  SMTP_HOST: The SMTP host for sending emails. (Default: none, required)")
+    fmt.Println("  SMTP_PORT: The SMTP port for sending emails. Valid values are integers. (Default: none, required)")
+    fmt.Println("  WEB_SERVER_ADDRESS: The address where the web server will be hosted. (Default: none, required)")
+    fmt.Println("  EMAIL_REPLY_TO: The reply-to email address for outgoing emails. (Default: none, required)")
+    fmt.Println("  RECAPTCHA_SITE_KEY: The site key for reCAPTCHA. (Default: none, optional)")
+    fmt.Println("  RECAPTCHA_SECRET_KEY: The secret key for reCAPTCHA. (Default: none, optional)")
+    fmt.Println("  USE_RECAPTCHA: Whether to use reCAPTCHA. Valid values are 'true' or 'false'. (Default: false, optional)")
+    fmt.Println("  USER: The user name or ID for dropping privileges. (Default: none, optional)")
+    fmt.Println("  GROUP: The group name or ID for dropping privileges. (Default: none, optional)")
+    fmt.Println("  HASH_KEY: The secret hash key for generating secure tokens. (Default: none, required)")
+    fmt.Println("  REQUIRE_FIRST_AND_LAST_NAME: Whether firstname and lastname are required. Valid values are 'true' or 'false'. (Default: false, optional)")
+    fmt.Println("  USE_JWT_AUTH: Whether to use JWT authentication. Valid values are 'true' or 'false'. (Default: false, optional)")
+    fmt.Println("  JWT_SECRET: The secret key for signing JWTs. (Default: none, required if USE_JWT_AUTH is true)")
+    fmt.Println("  JWT_EXPIRATION_HOURS: The expiration time for JWTs in hours. Valid values are integers. (Default: 24, optional)")
+    fmt.Println("  REFRESH_TOKEN_SECRET: The secret key for signing refresh tokens. (Default: none, required if USE_JWT_AUTH is true)")
+    fmt.Println("  REFRESH_TOKEN_EXPIRATION_HOURS: The expiration time for refresh tokens in hours. Valid values are integers. (Default: 720, optional)")
     fmt.Println()
     fmt.Println("Example of creating a suitable hash key using Linux CLI commands:")
     fmt.Println("  dd if=/dev/urandom bs=32 count=1 | base64")
@@ -632,7 +643,7 @@ func logRequest(handler http.Handler) http.Handler {
 }
 
 func homeHandler(w http.ResponseWriter, r *http.Request) {
-    if (!dbAvailable) {
+    if !dbAvailable {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
@@ -656,7 +667,7 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func signupHandler(w http.ResponseWriter, r *http.Request) {
-    if !dbAvailable {
+    if (!dbAvailable) {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
@@ -685,7 +696,7 @@ func signupHandler(w http.ResponseWriter, r *http.Request) {
         }
 
         hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-        err := db.CreateUser(username, string(hashedPassword), email, firstname, lastname)
+        err := db.CreateUser(username, string(hashedPassword), email, firstname, lastname, nil)
         if err != nil {
             jsonResponse(w, http.StatusBadRequest, "Username or email already exists", nil)
             return
