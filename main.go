@@ -634,7 +634,7 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
         password := r.FormValue("password")
 
         if !isValidUsername(username) || !isValidPassword(password) {
-            if (r.Header.Get("Content-Type") == "application/json") {
+            if r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusBadRequest, "Invalid input", nil)
             } else {
                 errorResponse(w, http.StatusBadRequest, "Invalid input")
@@ -652,7 +652,7 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
         attempts := loginAttemptsByAccount[username]
         if attempts >= loginMaxPerHour {
             loginLock.Unlock()
-            if (r.Header.Get("Content-Type") == "application/json") {
+            if r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusTooManyRequests, "Too many login attempts", nil)
             } else {
                 errorResponse(w, http.StatusTooManyRequests, "Too many login attempts")
@@ -665,7 +665,7 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
         user, err := db.GetUserByUsername(username)
         if err != nil {
             db.IncrementUnsuccessfulSignins(username)
-            if r.Header.Get("Content-Type") == "application/json" {
+            if r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusUnauthorized, "Invalid credentials", nil)
             } else {
                 errorResponse(w, http.StatusUnauthorized, "Invalid credentials")
@@ -674,7 +674,7 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
         }
 
         if !user.Verified {
-            if r.Header.Get("Content-Type") == "application/json" {
+            if r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusUnauthorized, "Account not verified", nil)
             } else {
                 errorResponse(w, http.StatusUnauthorized, "Account not verified")
@@ -684,7 +684,7 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
 
         if bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password)) != nil {
             db.IncrementUnsuccessfulSignins(username)
-            if r.Header.Get("Content-Type") == "application/json" {
+            if r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusUnauthorized, "Invalid credentials", nil)
             } else {
                 errorResponse(w, http.StatusUnauthorized, "Invalid credentials")
@@ -719,7 +719,7 @@ func signoutHandler(w http.ResponseWriter, r *http.Request) {
     session, _ := store.Get(r, "session")
     delete(session.Values, "username")
     session.Save(r, w)
-    if r.Header.Get("Content-Type") == "application/json" {
+    if r.Header.Get("Content-Type") == "application/json") {
         jsonResponse(w, http.StatusOK, "Signout successful", nil)
     } else {
         http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -734,8 +734,8 @@ func forgotHandler(w http.ResponseWriter, r *http.Request) {
     if r.Method == http.MethodPost {
         email := r.FormValue("email")
 
-        if !isValidEmail(email) {
-            if (r.Header.Get("Content-Type") == "application/json") {
+        if (!isValidEmail(email)) {
+            if r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusBadRequest, "Invalid email", nil)
             } else {
                 errorResponse(w, http.StatusBadRequest, "Invalid email")
@@ -760,15 +760,15 @@ func forgotHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func resetHandler(w http.ResponseWriter, r *http.Request) {
-    if !dbAvailable {
+    if (!dbAvailable) {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
-    if r.Method == http.MethodPost {
+    if (r.Method == http.MethodPost) {
         token := r.FormValue("token")
         newPassword := r.FormValue("new_password")
 
-        if !isValidPassword(newPassword) {
+        if (!isValidPassword(newPassword)) {
             if (r.Header.Get("Content-Type") == "application/json") {
                 jsonResponse(w, http.StatusBadRequest, "Invalid input", nil)
             } else {
@@ -778,14 +778,14 @@ func resetHandler(w http.ResponseWriter, r *http.Request) {
         }
 
         email, err := validateResetToken(token)
-        if err != nil {
+        if (err != nil) {
             jsonResponse(w, http.StatusUnauthorized, "Invalid token", nil)
             return
         }
 
         hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
         err = db.UpdateUserPasswordByEmail(email, string(hashedPassword))
-        if err != nil {
+        if (err != nil) {
             jsonResponse(w, http.StatusBadRequest, "Could not update password", nil)
             return
         }
@@ -797,13 +797,13 @@ func resetHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func verifyHandler(w http.ResponseWriter, r *http.Request) {
-    if !dbAvailable {
+    if (!dbAvailable) {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
     token := r.URL.Query().Get("token") // Extracting the token from the query parameters
     userID, err := validateVerificationToken(token) // Validating the token
-    if err != nil {
+    if (err != nil) {
         if (r.Header.Get("Content-Type") == "application/json") {
             jsonResponse(w, http.StatusBadRequest, "Invalid token", nil)
         } else {
@@ -813,13 +813,13 @@ func verifyHandler(w http.ResponseWriter, r *http.Request) {
     }
 
     user, err := db.GetUserByID(userID) // Fetching the user by ID
-    if err != nil {
+    if (err != nil) {
         jsonResponse(w, http.StatusInternalServerError, "Could not retrieve user", nil)
         return
     }
 
     err = db.UpdateUserVerification(user.Email)
-    if err != nil {
+    if (err != nil) {
         if (r.Header.Get("Content-Type") == "application/json") {
             jsonResponse(w, http.StatusBadRequest, "Verification failed", nil)
         } else {
@@ -844,7 +844,7 @@ func generateVerificationToken(userID string) (string, error) {
 
     // Encode the token using securecookie
     encoded, err := s.Encode("verification_token", value)
-    if err != nil {
+    if (err != nil) {
         return "", err
     }
 
@@ -854,18 +854,18 @@ func generateVerificationToken(userID string) (string, error) {
 
 func validateVerificationToken(encodedToken string) (string, error) {
     decoded, err := base64.URLEncoding.DecodeString(encodedToken)
-    if err != nil {
+    if (err != nil) {
         return "", err
     }
     value := make(map[string]string)
-    if err = s.Decode("verification_token", string(decoded), &value); err != nil {
+    if (err = s.Decode("verification_token", string(decoded), &value); err != nil) {
         return "", err
     }
     exp, err := strconv.ParseInt(value["exp"], 10, 64)
-    if err != nil {
+    if (err != nil) {
         return "", err
     }
-    if time.Now().Unix() > exp {
+    if (time.Now().Unix() > exp) {
         return "", fmt.Errorf("token expired")
     }
     return value["user_id"], nil
@@ -877,7 +877,7 @@ func generateResetToken(email string) (string, error) {
         "exp":   fmt.Sprintf("%d", time.Now().Add(15*time.Minute).Unix()),
     }
     encoded, err := s.Encode("reset_token", value)
-    if err != nil {
+    if (err != nil) {
         return "", err
     }
     return base64.URLEncoding.EncodeToString([]byte(encoded)), nil
@@ -885,18 +885,18 @@ func generateResetToken(email string) (string, error) {
 
 func validateResetToken(encodedToken string) (string, error) {
     decoded, err := base64.URLEncoding.DecodeString(encodedToken)
-    if err != nil {
+    if (err != nil) {
         return "", err
     }
     value := make(map[string]string)
-    if err = s.Decode("reset_token", string(decoded), &value); err != nil {
+    if (err = s.Decode("reset_token", string(decoded), &value); err != nil) {
         return "", err
     }
     exp, err := strconv.ParseInt(value["exp"], 10, 64)
-    if err != nil {
+    if (err != nil) {
         return "", err
     }
-    if time.Now().Unix() > exp {
+    if (time.Now().Unix() > exp) {
         return "", fmt.Errorf("token expired")
     }
     return value["email"], nil
@@ -913,6 +913,12 @@ func sendEmail(to, subject, body string) error {
     d := gomail.NewDialer(config.SmtpHost, config.SmtpPort, config.EmailSender, config.EmailPassword)
 
     return d.DialAndSend(m)
+}
+
+func sendVerificationEmail(to, token string) error {
+    verificationURL := fmt.Sprintf("%s/verify?token=%s", config.WebServerAddress, token)
+    emailBody := fmt.Sprintf("Please click the following link to verify your account: %s", verificationURL)
+    return sendEmail(to, "Verify your account", emailBody)
 }
 
 func isValidUsername(username string) bool {
@@ -974,7 +980,7 @@ func isStaticallyLinked() bool {
 
     buf := make([]byte, 1024)
     _, err = f.Read(buf)
-    if err != nil {
+    if err != nil) {
         log.Fatalf("Failed to read /proc/self/exe: %v", err)
     }
 
