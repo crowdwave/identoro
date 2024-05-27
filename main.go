@@ -52,25 +52,27 @@ var (
 )
 
 type Config struct {
-    DbType                 string
-    ConnStr                string
-    SecretKey              string
-    EmailSender            string
-    EmailPassword          string
-    SmtpHost               string
-    SmtpPort               int
-    WebServerAddress       string
-    EmailReplyTo           string
-    RecaptchaSiteKey       string
-    RecaptchaSecretKey     string
-    UseRecaptcha           bool
-    User                   string
-    Group                  string
-    HashKey                string
-    RequireFirstAndLastName bool
-    UseJWTAuth             bool
-    JWTSecret              string
-    JWTExpirationHours     int
+    DbType                     string
+    ConnStr                    string
+    SecretKey                  string
+    EmailSender                string
+    EmailPassword              string
+    SmtpHost                   string
+    SmtpPort                   int
+    WebServerAddress           string
+    EmailReplyTo               string
+    RecaptchaSiteKey           string
+    RecaptchaSecretKey         string
+    UseRecaptcha               bool
+    User                       string
+    Group                      string
+    HashKey                    string
+    RequireFirstAndLastName    bool
+    UseJWTAuth                 bool
+    JWTSecret                  string
+    JWTExpirationHours         int
+    RefreshTokenSecret         string
+    RefreshTokenExpirationHours int
 }
 
 type User struct {
@@ -84,6 +86,7 @@ type User struct {
     SigninCount         int
     UnsuccessfulSignins int
     CreatedAt           time.Time
+    RefreshToken        string
 }
 
 type Database interface {
@@ -96,6 +99,8 @@ type Database interface {
     IncrementSigninCount(userID string) error
     IncrementUnsuccessfulSignins(username string) error
     ResetUnsuccessfulSignins(username string) error
+    StoreRefreshToken(userID, token string) error
+    GetRefreshToken(userID string) (string, error)
     TestConnection() error
 }
 
@@ -122,7 +127,7 @@ func (db *PostgresDB) CreateUser(username, password, email, firstname, lastname 
         return fmt.Errorf("database not available")
     }
     userID := uuid.New().String()
-    query := `INSERT INTO identoro_users (user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at) VALUES ($1, $2, $3, $4, $5, $6, FALSE, 0, 0, CURRENT_TIMESTAMP)`
+    query := `INSERT INTO identoro_users (user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at, refresh_token) VALUES ($1, $2, $3, $4, $5, $6, FALSE, 0, 0, CURRENT_TIMESTAMP, '')`
     _, err := db.pool.Exec(context.Background(), query, userID, username, password, email, firstname, lastname)
     return err
 }
@@ -132,9 +137,9 @@ func (db *PostgresDB) GetUserByUsername(username string) (User, error) {
     if !dbAvailable {
         return user, fmt.Errorf("database not available")
     }
-    query := `SELECT user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at FROM identoro_users WHERE username = $1`
+    query := `SELECT user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at, refresh_token FROM identoro_users WHERE username = $1`
     row := db.pool.QueryRow(context.Background(), query, username)
-    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Firstname, &user.Lastname, &user.Verified, &user.SigninCount, &user.UnsuccessfulSignins, &user.CreatedAt)
+    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Firstname, &user.Lastname, &user.Verified, &user.SigninCount, &user.UnsuccessfulSignins, &user.CreatedAt, &user.RefreshToken)
     return user, err
 }
 
@@ -143,9 +148,9 @@ func (db *PostgresDB) GetUserByID(userID string) (User, error) {
     if !dbAvailable {
         return user, fmt.Errorf("database not available")
     }
-    query := `SELECT user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at FROM identoro_users WHERE user_id = $1`
+    query := `SELECT user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at, refresh_token FROM identoro_users WHERE user_id = $1`
     row := db.pool.QueryRow(context.Background(), query, userID)
-    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Firstname, &user.Lastname, &user.Verified, &user.SigninCount, &user.UnsuccessfulSignins, &user.CreatedAt)
+    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Firstname, &user.Lastname, &user.Verified, &user.SigninCount, &user.UnsuccessfulSignins, &user.CreatedAt, &user.RefreshToken)
     return user, err
 }
 
@@ -185,6 +190,20 @@ func (db *PostgresDB) ResetUnsuccessfulSignins(username string) error {
     return err
 }
 
+func (db *PostgresDB) StoreRefreshToken(userID, token string) error {
+    query := `UPDATE identoro_users SET refresh_token = $1 WHERE user_id = $2`
+    _, err := db.pool.Exec(context.Background(), query, token, userID)
+    return err
+}
+
+func (db *PostgresDB) GetRefreshToken(userID string) (string, error) {
+    var refreshToken string
+    query := `SELECT refresh_token FROM identoro_users WHERE user_id = $1`
+    row := db.pool.QueryRow(context.Background(), query, userID)
+    err := row.Scan(&refreshToken)
+    return refreshToken, err
+}
+
 func (db *PostgresDB) TestConnection() error {
     var result int
     return db.pool.QueryRow(context.Background(), "SELECT 1").Scan(&result)
@@ -203,24 +222,24 @@ func (db *SQLiteDB) Open() error {
 
 func (db *SQLiteDB) CreateUser(username, password, email, firstname, lastname string) error {
     userID := uuid.New().String()
-    query := `INSERT INTO identoro_users (user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, CURRENT_TIMESTAMP)`
+    query := `INSERT INTO identoro_users (user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at, refresh_token) VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, CURRENT_TIMESTAMP, '')`
     _, err := db.db.Exec(query, userID, username, password, email, firstname, lastname)
     return err
 }
 
 func (db *SQLiteDB) GetUserByUsername(username string) (User, error) {
     var user User
-    query := `SELECT user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at FROM identoro_users WHERE username = ?`
+    query := `SELECT user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at, refresh_token FROM identoro_users WHERE username = ?`
     row := db.db.QueryRow(query, username)
-    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Firstname, &user.Lastname, &user.Verified, &user.SigninCount, &user.UnsuccessfulSignins, &user.CreatedAt)
+    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Firstname, &user.Lastname, &user.Verified, &user.SigninCount, &user.UnsuccessfulSignins, &user.CreatedAt, &user.RefreshToken)
     return user, err
 }
 
 func (db *SQLiteDB) GetUserByID(userID string) (User, error) {
     var user User
-    query := `SELECT user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at FROM identoro_users WHERE user_id = ?`
+    query := `SELECT user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at, refresh_token FROM identoro_users WHERE user_id = ?`
     row := db.db.QueryRow(query, userID)
-    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Firstname, &user.Lastname, &user.Verified, &user.SigninCount, &user.UnsuccessfulSignins, &user.CreatedAt)
+    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Firstname, &user.Lastname, &user.Verified, &user.SigninCount, &user.UnsuccessfulSignins, &user.CreatedAt, &user.RefreshToken)
     return user, err
 }
 
@@ -254,6 +273,20 @@ func (db *SQLiteDB) ResetUnsuccessfulSignins(username string) error {
     return err
 }
 
+func (db *SQLiteDB) StoreRefreshToken(userID, token string) error {
+    query := `UPDATE identoro_users SET refresh_token = ? WHERE user_id = ?`
+    _, err := db.db.Exec(query, token, userID)
+    return err
+}
+
+func (db *SQLiteDB) GetRefreshToken(userID string) (string, error) {
+    var refreshToken string
+    query := `SELECT refresh_token FROM identoro_users WHERE user_id = ?`
+    row := db.db.QueryRow(query, userID)
+    err := row.Scan(&refreshToken)
+    return refreshToken, err
+}
+
 func (db *SQLiteDB) TestConnection() error {
     return db.db.Ping()
 }
@@ -274,31 +307,43 @@ func loadConfig() (*Config, error) {
         return nil, fmt.Errorf("invalid JWT_EXPIRATION_HOURS value in .env file")
     }
 
+    refreshTokenExpirationHours, err := strconv.Atoi(os.Getenv("REFRESH_TOKEN_EXPIRATION_HOURS"))
+    if err != nil {
+        return nil, fmt.Errorf("invalid REFRESH_TOKEN_EXPIRATION_HOURS value in .env file")
+    }
+
     useRecaptcha, err := strconv.ParseBool(os.Getenv("USE_RECAPTCHA"))
     if err != nil {
-        return nil, fmt.Errorf("invalid USE_RECAPTCHA value in .env file")
+        useRecaptcha = false
+    }
+
+    useJWTAuth, err := strconv.ParseBool(os.Getenv("USE_JWT_AUTH"))
+    if err != nil {
+        useJWTAuth = false
     }
 
     config := &Config{
-        DbType:                 os.Getenv("DB_TYPE"),
-        ConnStr:                os.Getenv("DATABASE_URL"),
-        SecretKey:              os.Getenv("SECRET_KEY"),
-        EmailSender:            os.Getenv("EMAIL_SENDER"),
-        EmailPassword:          os.Getenv("EMAIL_PASSWORD"),
-        SmtpHost:               os.Getenv("SMTP_HOST"),
-        SmtpPort:               smtpPort,
-        WebServerAddress:       os.Getenv("WEB_SERVER_ADDRESS"),
-        EmailReplyTo:           os.Getenv("EMAIL_REPLY_TO"),
-        RecaptchaSiteKey:       os.Getenv("RECAPTCHA_SITE_KEY"),
-        RecaptchaSecretKey:     os.Getenv("RECAPTCHA_SECRET_KEY"),
-        UseRecaptcha:           useRecaptcha,
-        User:                   os.Getenv("USER"),
-        Group:                  os.Getenv("GROUP"),
-        HashKey:                os.Getenv("HASH_KEY"),
-        RequireFirstAndLastName: os.Getenv("REQUIRE_FIRST_AND_LAST_NAME") == "true",
-        UseJWTAuth:             os.Getenv("USE_JWT_AUTH") == "true",
-        JWTSecret:              os.Getenv("JWT_SECRET"),
-        JWTExpirationHours:     jwtExpirationHours,
+        DbType:                     os.Getenv("DB_TYPE"),
+        ConnStr:                    os.Getenv("DATABASE_URL"),
+        SecretKey:                  os.Getenv("SECRET_KEY"),
+        EmailSender:                os.Getenv("EMAIL_SENDER"),
+        EmailPassword:              os.Getenv("EMAIL_PASSWORD"),
+        SmtpHost:                   os.Getenv("SMTP_HOST"),
+        SmtpPort:                   smtpPort,
+        WebServerAddress:           os.Getenv("WEB_SERVER_ADDRESS"),
+        EmailReplyTo:               os.Getenv("EMAIL_REPLY_TO"),
+        RecaptchaSiteKey:           os.Getenv("RECAPTCHA_SITE_KEY"),
+        RecaptchaSecretKey:         os.Getenv("RECAPTCHA_SECRET_KEY"),
+        UseRecaptcha:               useRecaptcha,
+        User:                       os.Getenv("USER"),
+        Group:                      os.Getenv("GROUP"),
+        HashKey:                    os.Getenv("HASH_KEY"),
+        RequireFirstAndLastName:    os.Getenv("REQUIRE_FIRST_AND_LAST_NAME") == "true",
+        UseJWTAuth:                 useJWTAuth,
+        JWTSecret:                  os.Getenv("JWT_SECRET"),
+        JWTExpirationHours:         jwtExpirationHours,
+        RefreshTokenSecret:         os.Getenv("REFRESH_TOKEN_SECRET"),
+        RefreshTokenExpirationHours: refreshTokenExpirationHours,
     }
 
     // Validate environment variables
@@ -326,13 +371,28 @@ func loadHashKey() ([]byte, error) {
     return []byte(key), nil
 }
 
-func generateJWT(user User) (string, error) {
+func generateJWT(user User) (string, string, error) {
     claims := jwt.MapClaims{
         "user_id": user.UserID,
         "exp":     time.Now().Add(time.Hour * time.Duration(config.JWTExpirationHours)).Unix(),
     }
     token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-    return token.SignedString([]byte(config.JWTSecret))
+    jwtToken, err := token.SignedString([]byte(config.JWTSecret))
+    if err != nil {
+        return "", "", err
+    }
+
+    refreshTokenClaims := jwt.MapClaims{
+        "user_id": user.UserID,
+        "exp":     time.Now().Add(time.Hour * time.Duration(config.RefreshTokenExpirationHours)).Unix(),
+    }
+    refreshToken := jwt.NewWithClaims(jwt.SigningMethodHS256, refreshTokenClaims)
+    refreshTokenString, err := refreshToken.SignedString([]byte(config.RefreshTokenSecret))
+    if err != nil {
+        return "", "", err
+    }
+
+    return jwtToken, refreshTokenString, nil
 }
 
 func printConfig(config *Config) {
@@ -357,6 +417,8 @@ func printConfig(config *Config) {
     fmt.Printf("  USE_JWT_AUTH: %t\n", config.UseJWTAuth)
     fmt.Printf("  JWT_SECRET: %s\n", maskString(config.JWTSecret))
     fmt.Printf("  JWT_EXPIRATION_HOURS: %d\n", config.JWTExpirationHours)
+    fmt.Printf("  REFRESH_TOKEN_SECRET: %s\n", maskString(config.RefreshTokenSecret))
+    fmt.Printf("  REFRESH_TOKEN_EXPIRATION_HOURS: %d\n", config.RefreshTokenExpirationHours)
 
     if config.DbType == "postgres" {
         fmt.Println("\nExample SQL for creating an updatable view for PostgreSQL:")
@@ -440,14 +502,16 @@ func displayHelp() {
     fmt.Println("  EMAIL_REPLY_TO: The reply-to email address for outgoing emails.")
     fmt.Println("  RECAPTCHA_SITE_KEY: The site key for reCAPTCHA.")
     fmt.Println("  RECAPTCHA_SECRET_KEY: The secret key for reCAPTCHA.")
-    fmt.Println("  USE_RECAPTCHA: Whether to use reCAPTCHA (true/false).")
+    fmt.Println("  USE_RECAPTCHA: Whether to use reCAPTCHA (true/false). Default is false.")
     fmt.Println("  USER: The user name or ID for dropping privileges.")
     fmt.Println("  GROUP: The group name or ID for dropping privileges.")
     fmt.Println("  HASH_KEY: The secret hash key for generating secure tokens.")
     fmt.Println("  REQUIRE_FIRST_AND_LAST_NAME: Whether firstname and lastname are required (true/false).")
-    fmt.Println("  USE_JWT_AUTH: Whether to use JWT authentication (true/false).")
+    fmt.Println("  USE_JWT_AUTH: Whether to use JWT authentication (true/false). Default is false.")
     fmt.Println("  JWT_SECRET: The secret key for signing JWTs.")
     fmt.Println("  JWT_EXPIRATION_HOURS: The expiration time for JWTs in hours.")
+    fmt.Println("  REFRESH_TOKEN_SECRET: The secret key for signing refresh tokens.")
+    fmt.Println("  REFRESH_TOKEN_EXPIRATION_HOURS: The expiration time for refresh tokens in hours.")
     fmt.Println()
     fmt.Println("Example of creating a suitable hash key using Linux CLI commands:")
     fmt.Println("  dd if=/dev/urandom bs=32 count=1 | base64")
@@ -521,6 +585,7 @@ func main() {
     http.Handle("/reset", logRequest(csrfMiddleware(http.HandlerFunc(resetHandler))))
     http.Handle("/verify", logRequest(csrfMiddleware(http.HandlerFunc(verifyHandler))))
     http.Handle("/me", logRequest(csrfMiddleware(http.HandlerFunc(meHandler))))
+    http.Handle("/refresh", logRequest(csrfMiddleware(http.HandlerFunc(refreshTokenHandler))))
 
     // Secure middleware
     secureMiddleware := secure.New(secure.Options{
@@ -567,7 +632,7 @@ func logRequest(handler http.Handler) http.Handler {
 }
 
 func homeHandler(w http.ResponseWriter, r *http.Request) {
-    if !dbAvailable {
+    if (!dbAvailable) {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
@@ -584,6 +649,7 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
             "/reset",
             "/verify",
             "/me",
+            "/refresh",
         },
     }
     jsonResponse(w, http.StatusOK, "Home", response)
@@ -706,12 +772,19 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
         }
 
         if config.UseJWTAuth {
-            token, err := generateJWT(user)
+            jwtToken, refreshToken, err := generateJWT(user)
             if err != nil {
                 http.Error(w, "Could not generate token", http.StatusInternalServerError)
                 return
             }
-            jsonResponse(w, http.StatusOK, "Signin successful", map[string]string{"token": token})
+
+            err = db.StoreRefreshToken(user.UserID, refreshToken)
+            if err != nil {
+                http.Error(w, "Could not store refresh token", http.StatusInternalServerError)
+                return
+            }
+
+            jsonResponse(w, http.StatusOK, "Signin successful", map[string]string{"token": jwtToken, "refresh_token": refreshToken})
         } else {
             session, _ := store.Get(r, "session")
             session.Values["username"] = username
@@ -872,6 +945,63 @@ func validateResetToken(tokenString string) (string, error) {
         return claims["email"].(string), nil
     }
     return "", fmt.Errorf("invalid token")
+}
+
+func refreshTokenHandler(w http.ResponseWriter, r *http.Request) {
+    if !dbAvailable {
+        jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
+        return
+    }
+    switch r.Method {
+    case http.MethodPost:
+        refreshToken := r.FormValue("refresh_token")
+        token, err := jwt.Parse(refreshToken, func(token *jwt.Token) (interface{}, error) {
+            if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+                return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+            }
+            return []byte(config.RefreshTokenSecret), nil
+        })
+
+        if err != nil || !token.Valid {
+            jsonResponse(w, http.StatusUnauthorized, "Invalid refresh token", nil)
+            return
+        }
+
+        claims, ok := token.Claims.(jwt.MapClaims)
+        if !ok || !token.Valid {
+            jsonResponse(w, http.StatusUnauthorized, "Invalid token claims", nil)
+            return
+        }
+
+        userID := claims["user_id"].(string)
+        storedRefreshToken, err := db.GetRefreshToken(userID)
+        if err != nil || storedRefreshToken != refreshToken {
+            jsonResponse(w, http.StatusUnauthorized, "Invalid refresh token", nil)
+            return
+        }
+
+        user, err := db.GetUserByID(userID)
+        if err != nil {
+            jsonResponse(w, http.StatusInternalServerError, "Could not retrieve user", nil)
+            return
+        }
+
+        newJwtToken, newRefreshToken, err := generateJWT(user)
+        if err != nil {
+            jsonResponse(w, http.StatusInternalServerError, "Could not generate new token", nil)
+            return
+        }
+
+        err = db.StoreRefreshToken(userID, newRefreshToken)
+        if err != nil {
+            jsonResponse(w, http.StatusInternalServerError, "Could not store new refresh token", nil)
+            return
+        }
+
+        jsonResponse(w, http.StatusOK, "Token refreshed", map[string]string{"token": newJwtToken, "refresh_token": newRefreshToken})
+    default:
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+    }
 }
 
 func sendEmail(to, subject, body string) error {
