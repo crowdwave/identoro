@@ -103,6 +103,9 @@ type Database interface {
     StoreRefreshToken(userID, token string) error
     GetRefreshToken(userID string) (string, error)
     TestConnection() error
+    CheckTables() error
+    CreateTables() error
+    LogEvent(userID, eventType string) error
 }
 
 type PostgresDB struct {
@@ -123,6 +126,62 @@ func (db *PostgresDB) Open() error {
     return err
 }
 
+func (db *PostgresDB) CheckTables() error {
+    var exists bool
+    query := `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'identoro_users')`
+    err := db.pool.QueryRow(context.Background(), query).Scan(&exists)
+    if err != nil {
+        return err
+    }
+    if !exists {
+        return fmt.Errorf("identoro_users table does not exist. Run the application with the --createtables flag to create the required tables.")
+    }
+
+    query = `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'identoro_message_queue')`
+    err = db.pool.QueryRow(context.Background(), query).Scan(&exists)
+    if err != nil {
+        return err
+    }
+    if !exists {
+        return fmt.Errorf("identoro_message_queue table does not exist. Run the application with the --createtables flag to create the required tables.")
+    }
+
+    return nil
+}
+
+func (db *PostgresDB) CreateTables() error {
+    createUsersTable := `
+    CREATE TABLE IF NOT EXISTS identoro_users (
+        user_id UUID PRIMARY KEY,
+        username VARCHAR(50) NOT NULL,
+        password VARCHAR(100) NOT NULL,
+        email VARCHAR(100) NOT NULL,
+        firstname VARCHAR(50),
+        lastname VARCHAR(50),
+        verified BOOLEAN NOT NULL DEFAULT FALSE,
+        signin_count INTEGER NOT NULL DEFAULT 0,
+        unsuccessful_signins INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        refresh_token TEXT,
+        extensions JSONB
+    );`
+    _, err := db.pool.Exec(context.Background(), createUsersTable)
+    if err != nil {
+        return err
+    }
+
+    createMessageQueueTable := `
+    CREATE TABLE IF NOT EXISTS identoro_message_queue (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        user_id UUID,
+        event_type TEXT NOT NULL,
+        processed BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );`
+    _, err = db.pool.Exec(context.Background(), createMessageQueueTable)
+    return err
+}
+
 func (db *PostgresDB) CreateUser(username, password, email, firstname, lastname string, extensions map[string]interface{}) error {
     if !dbAvailable {
         return fmt.Errorf("database not available")
@@ -134,7 +193,10 @@ func (db *PostgresDB) CreateUser(username, password, email, firstname, lastname 
     }
     query := `INSERT INTO identoro_users (user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at, refresh_token, extensions) VALUES ($1, $2, $3, $4, $5, $6, FALSE, 0, 0, CURRENT_TIMESTAMP, '', $7)`
     _, err = db.pool.Exec(context.Background(), query, userID, username, password, email, firstname, lastname, extensionsJSON)
-    return err
+    if err != nil {
+        return err
+    }
+    return db.LogEvent(userID, "signup")
 }
 
 func (db *PostgresDB) GetUserByUsername(username string) (User, error) {
@@ -214,6 +276,12 @@ func (db *PostgresDB) TestConnection() error {
     return db.pool.QueryRow(context.Background(), "SELECT 1").Scan(&result)
 }
 
+func (db *PostgresDB) LogEvent(userID, eventType string) error {
+    query := `INSERT INTO identoro_message_queue (user_id, event_type, processed) VALUES ($1, $2, FALSE)`
+    _, err := db.pool.Exec(context.Background(), query, userID, eventType)
+    return err
+}
+
 type SQLiteDB struct {
     connStr string
     db      *sql.DB
@@ -222,6 +290,62 @@ type SQLiteDB struct {
 func (db *SQLiteDB) Open() error {
     var err error
     db.db, err = sql.Open("sqlite3", db.connStr)
+    if err != nil {
+        return err
+    }
+
+    return db.CheckTables()
+}
+
+func (db *SQLiteDB) CheckTables() error {
+    query := `SELECT name FROM sqlite_master WHERE type='table' AND name='identoro_users';`
+    var name string
+    err := db.db.QueryRow(query).Scan(&name)
+    if err == sql.ErrNoRows {
+        return fmt.Errorf("identoro_users table does not exist. Run the application with the --createtables flag to create the required tables.")
+    }
+    if err != nil {
+        return err
+    }
+
+    query = `SELECT name FROM sqlite_master WHERE type='table' AND name='identoro_message_queue';`
+    err = db.db.QueryRow(query).Scan(&name)
+    if err == sql.ErrNoRows {
+        return fmt.Errorf("identoro_message_queue table does not exist. Run the application with the --createtables flag to create the required tables.")
+    }
+    return err
+}
+
+func (db *SQLiteDB) CreateTables() error {
+    createUsersTable := `
+    CREATE TABLE IF NOT EXISTS identoro_users (
+        user_id TEXT PRIMARY KEY,
+        username TEXT NOT NULL,
+        password TEXT NOT NULL,
+        email TEXT NOT NULL,
+        firstname TEXT,
+        lastname TEXT,
+        verified BOOLEAN NOT NULL DEFAULT FALSE,
+        signin_count INTEGER NOT NULL DEFAULT 0,
+        unsuccessful_signins INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        refresh_token TEXT,
+        extensions TEXT
+    );`
+    _, err := db.db.Exec(createUsersTable)
+    if err != nil {
+        return err
+    }
+
+    createMessageQueueTable := `
+    CREATE TABLE IF NOT EXISTS identoro_message_queue (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(6)))),
+        user_id TEXT,
+        event_type TEXT NOT NULL,
+        processed BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );`
+    _, err = db.db.Exec(createMessageQueueTable)
     return err
 }
 
@@ -233,7 +357,10 @@ func (db *SQLiteDB) CreateUser(username, password, email, firstname, lastname st
     }
     query := `INSERT INTO identoro_users (user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at, refresh_token, extensions) VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, CURRENT_TIMESTAMP, '', ?)`
     _, err = db.db.Exec(query, userID, username, password, email, firstname, lastname, extensionsJSON)
-    return err
+    if err != nil {
+        return err
+    }
+    return db.LogEvent(userID, "signup")
 }
 
 func (db *SQLiteDB) GetUserByUsername(username string) (User, error) {
@@ -298,6 +425,12 @@ func (db *SQLiteDB) GetRefreshToken(userID string) (string, error) {
 
 func (db *SQLiteDB) TestConnection() error {
     return db.db.Ping()
+}
+
+func (db *SQLiteDB) LogEvent(userID, eventType string) error {
+    query := `INSERT INTO identoro_message_queue (user_id, event_type, processed) VALUES (?, ?, 0)`
+    _, err := db.db.Exec(query, userID, eventType)
+    return err
 }
 
 func loadConfig() (*Config, error) {
@@ -428,50 +561,6 @@ func printConfig(config *Config) {
     fmt.Printf("  JWT_EXPIRATION_HOURS: %d\n", config.JWTExpirationHours)
     fmt.Printf("  REFRESH_TOKEN_SECRET: %s\n", maskString(config.RefreshTokenSecret))
     fmt.Printf("  REFRESH_TOKEN_EXPIRATION_HOURS: %d\n", config.RefreshTokenExpirationHours)
-
-    if config.DbType == "postgres" {
-        fmt.Println("\nExample SQL for creating an updatable view for PostgreSQL:")
-        fmt.Println(`CREATE VIEW identoro_users AS
-                      SELECT user_id, user_name AS username, passwd AS password, mail AS email, first_name AS firstname, last_name AS lastname, is_verified AS verified, signin_count, unsuccessful_signins, created_at, extensions
-                      FROM actual_users_table;
-
-                      CREATE RULE insert_identoro_users AS
-                      ON INSERT TO identoro_users
-                      DO INSTEAD
-                      INSERT INTO actual_users_table (user_name, passwd, mail, first_name, last_name, is_verified, signin_count, unsuccessful_signins, created_at, extensions)
-                      VALUES (NEW.username, NEW.password, NEW.email, NEW.firstname, NEW.lastname, NEW.verified, NEW.signin_count, NEW.unsuccessful_signins, NEW.created_at, NEW.extensions);
-
-                      CREATE RULE update_identoro_users AS
-                      ON UPDATE TO identoro_users
-                      DO INSTEAD
-                      UPDATE actual_users_table
-                      SET user_name = NEW.username,
-                          passwd = NEW.password,
-                          mail = NEW.email,
-                          first_name = NEW.firstname,
-                          last_name = NEW.lastname,
-                          is_verified = NEW.verified,
-                          signin_count = NEW.signin_count,
-                          unsuccessful_signins = NEW.unsuccessful_signins,
-                          created_at = NEW.created_at,
-                          extensions = NEW.extensions
-                      WHERE user_id = NEW.user_id;`)
-
-        fmt.Println("\nIf you do not already have a users table, you can use the following SQL to create it:")
-        fmt.Println(`CREATE TABLE identoro_users (
-                      user_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-                      user_name VARCHAR(50) NOT NULL,
-                      passwd VARCHAR(100) NOT NULL,
-                      mail VARCHAR(100) NOT NULL,
-                      first_name VARCHAR(50),
-                      last_name VARCHAR(50),
-                      is_verified BOOLEAN NOT NULL DEFAULT FALSE,
-                      signin_count INTEGER NOT NULL DEFAULT 0,
-                      unsuccessful_signins INTEGER NOT NULL DEFAULT 0,
-                      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                      extensions JSONB
-                  );`)
-    }
 }
 
 func maskString(s string) string {
@@ -499,7 +588,7 @@ func errorResponse(w http.ResponseWriter, statusCode int, message string) {
 }
 
 func displayHelp() {
-    fmt.Println("Usage: go run main.go [--help]")
+    fmt.Println("Usage: go run main.go [--help] [--createtables]")
     fmt.Println()
     fmt.Println("Environment Variables:")
     fmt.Println("  DB_TYPE: The type of database to use. Valid values are 'postgres' and 'sqlite'. (Default: none, required)")
@@ -532,6 +621,7 @@ func displayHelp() {
 
 func main() {
     help := flag.Bool("help", false, "Display help information")
+    createTables := flag.Bool("createtables", false, "Create required tables")
     flag.Parse()
 
     if *help {
@@ -563,20 +653,26 @@ func main() {
         log.Fatal("Unsupported database type")
     }
 
-    // Retry connecting to the database in a separate goroutine
-    go func() {
-        for {
-            err := db.Open()
-            if err == nil {
-                log.Println("Connected to the database")
-                dbAvailable = true
-                return
-            }
-            log.Printf("Database connection failed: %v. Retrying in %d seconds...", err, 1)
-            dbAvailable = false
-            time.Sleep(1 * time.Second)
+    err = db.Open()
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    if *createTables {
+        err = db.CreateTables()
+        if err != nil {
+            log.Fatal(err)
         }
-    }()
+        log.Println("Tables created successfully")
+        os.Exit(0)
+    }
+
+    err = db.CheckTables()
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    dbAvailable = true
 
     store = sessions.NewCookieStore([]byte(config.SecretKey))
     store.Options = &sessions.Options{
@@ -667,7 +763,7 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func signupHandler(w http.ResponseWriter, r *http.Request) {
-    if (!dbAvailable) {
+    if !dbAvailable {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
@@ -761,6 +857,7 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
         user, err := db.GetUserByUsername(username)
         if err != nil {
             db.IncrementUnsuccessfulSignins(username)
+            db.LogEvent("", "failed_signin")
             jsonResponse(w, http.StatusUnauthorized, "Invalid credentials", nil)
             return
         }
@@ -772,6 +869,7 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
 
         if bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password)) != nil {
             db.IncrementUnsuccessfulSignins(username)
+            db.LogEvent(user.UserID, "failed_signin")
             jsonResponse(w, http.StatusUnauthorized, "Invalid credentials", nil)
             return
         }
@@ -781,6 +879,8 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
         if err != nil {
             log.Printf("Failed to increment signin count: %v", err)
         }
+
+        db.LogEvent(user.UserID, "signin")
 
         if config.UseJWTAuth {
             jwtToken, refreshToken, err := generateJWT(user)
@@ -1188,7 +1288,7 @@ func jailSelf() {
 }
 
 func meHandler(w http.ResponseWriter, r *http.Request) {
-    if !dbAvailable {
+    if (!dbAvailable) {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
