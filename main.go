@@ -186,6 +186,15 @@ func (db *PostgresDB) CreateUser(username, password, email, firstname, lastname 
     if !dbAvailable {
         return fmt.Errorf("database not available")
     }
+
+    if len(firstname) > 50 {
+        return fmt.Errorf("firstname must be no more than 50 characters")
+    }
+
+    if len(lastname) > 50 {
+        return fmt.Errorf("lastname must be no more than 50 characters")
+    }
+
     userID := uuid.New().String()
     extensionsJSON, err := json.Marshal(extensions)
     if err != nil {
@@ -350,6 +359,14 @@ func (db *SQLiteDB) CreateTables() error {
 }
 
 func (db *SQLiteDB) CreateUser(username, password, email, firstname, lastname string, extensions map[string]interface{}) error {
+    if len(firstname) > 50 {
+        return fmt.Errorf("firstname must be no more than 50 characters")
+    }
+
+    if len(lastname) > 50 {
+        return fmt.Errorf("lastname must be no more than 50 characters")
+    }
+
     userID := uuid.New().String()
     extensionsJSON, err := json.Marshal(extensions)
     if err != nil {
@@ -776,11 +793,26 @@ func signupHandler(w http.ResponseWriter, r *http.Request) {
         lastname := r.FormValue("lastname")
         recaptchaResponse := r.FormValue("g-recaptcha-response")
 
-        if !isValidUsername(username) || !isValidEmail(email) || !isValidPassword(password) {
-            jsonResponse(w, http.StatusBadRequest, "Invalid input", nil)
+        if valid, msg := isValidUsername(username); !valid {
+            jsonResponse(w, http.StatusBadRequest, msg, nil)
             return
         }
-
+        if valid, msg := isValidEmail(email); !valid {
+            jsonResponse(w, http.StatusBadRequest, msg, nil)
+            return
+        }
+        if valid, msg := isValidPassword(password); !valid {
+            jsonResponse(w, http.StatusBadRequest, msg, nil)
+            return
+        }
+        if len(firstname) > 50 {
+            jsonResponse(w, http.StatusBadRequest, "Firstname must be no more than 50 characters", nil)
+            return
+        }
+        if len(lastname) > 50 {
+            jsonResponse(w, http.StatusBadRequest, "Lastname must be no more than 50 characters", nil)
+            return
+        }
         if config.RequireFirstAndLastName && (firstname == "" || lastname == "") {
             jsonResponse(w, http.StatusBadRequest, "Firstname and lastname are required", nil)
             return
@@ -834,8 +866,12 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
         username := r.FormValue("username")
         password := r.FormValue("password")
 
-        if !isValidUsername(username) || !isValidPassword(password) {
-            jsonResponse(w, http.StatusBadRequest, "Invalid input", nil)
+        if valid, msg := isValidUsername(username); !valid {
+            jsonResponse(w, http.StatusBadRequest, msg, nil)
+            return
+        }
+        if valid, msg := isValidPassword(password); !valid {
+            jsonResponse(w, http.StatusBadRequest, msg, nil)
             return
         }
 
@@ -923,8 +959,8 @@ func forgotHandler(w http.ResponseWriter, r *http.Request) {
     case http.MethodPost:
         email := r.FormValue("email")
 
-        if !isValidEmail(email) {
-            jsonResponse(w, http.StatusBadRequest, "Invalid email", nil)
+        if valid, msg := isValidEmail(email); !valid {
+            jsonResponse(w, http.StatusBadRequest, msg, nil)
             return
         }
 
@@ -954,8 +990,8 @@ func resetHandler(w http.ResponseWriter, r *http.Request) {
         token := r.FormValue("token")
         newPassword := r.FormValue("new_password")
 
-        if !isValidPassword(newPassword) {
-            jsonResponse(w, http.StatusBadRequest, "Invalid input", nil)
+        if valid, msg := isValidPassword(newPassword); !valid {
+            jsonResponse(w, http.StatusBadRequest, msg, nil)
             return
         }
 
@@ -1059,7 +1095,7 @@ func validateResetToken(tokenString string) (string, error) {
 }
 
 func refreshTokenHandler(w http.ResponseWriter, r *http.Request) {
-    if !dbAvailable {
+    if (!dbAvailable) {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
@@ -1134,18 +1170,27 @@ func sendVerificationEmail(to, token string) error {
     return sendEmail(to, "Verify your account", emailBody)
 }
 
-func isValidUsername(username string) bool {
+func isValidUsername(username string) (bool, string) {
     re := regexp.MustCompile(`^[a-zA-Z0-9_]{3,20}$`)
-    return re.MatchString(username)
+    if !re.MatchString(username) {
+        return false, "Username must be 3-20 characters long and contain only letters, numbers, and underscores"
+    }
+    return true, ""
 }
 
-func isValidEmail(email string) bool {
+func isValidEmail(email string) (bool, string) {
     re := regexp.MustCompile(`^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,4}$`)
-    return re.MatchString(email)
+    if !re.MatchString(email) {
+        return false, "Invalid email address"
+    }
+    return true, ""
 }
 
-func isValidPassword(password string) bool {
-    return len(password) >= 6
+func isValidPassword(password string) (bool, string) {
+    if len(password) < 6 {
+        return false, "Password must be at least 6 characters long"
+    }
+    return true, ""
 }
 
 func isValidURL(url string) bool {
