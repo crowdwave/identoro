@@ -100,8 +100,10 @@ Build the server:
 
 ```sh
 go mod tidy
-CGO_ENABLED=0 go build -o identoro main.go
+CGO_ENABLED=1 go build  -ldflags="-s -w" -o identoro
 ```
+
+The -ldflags="-s -w" flags are not strictly necessary to create a fully self-contained static binary; they are primarily used to reduce the size of the binary by removing debugging information. If your primary goal is to create a static binary without worrying about its size, you can omit these flags. The crucial part for creating a static binary is disabling CGO with CGO_ENABLED=0.
 
 ## Usage
 

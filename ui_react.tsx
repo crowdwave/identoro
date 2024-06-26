@@ -13,12 +13,15 @@ interface SigninResponse {
 
 interface AuthResponse {
   username: string;
+  name: string; // Assuming name is returned from the server
 }
 
 const Signup: React.FC = () => {
   const [username, setUsername] = useState<string>('');
   const [email, setEmail] = useState<string>('');
   const [password, setPassword] = useState<string>('');
+  const [firstname, setFirstname] = useState<string>('');
+  const [lastname, setLastname] = useState<string>('');
   const [recaptchaResponse, setRecaptchaResponse] = useState<string>('');
   const [message, setMessage] = useState<string>('');
 
@@ -33,6 +36,8 @@ const Signup: React.FC = () => {
           username,
           email,
           password,
+          firstname,
+          lastname,
           'g-recaptcha-response': recaptchaResponse
         })
       });
@@ -63,6 +68,18 @@ const Signup: React.FC = () => {
         placeholder="Password"
         value={password}
         onChange={(e) => setPassword(e.target.value)}
+      />
+      <input
+        type="text"
+        placeholder="Firstname"
+        value={firstname}
+        onChange={(e) => setFirstname(e.target.value)}
+      />
+      <input
+        type="text"
+        placeholder="Lastname"
+        value={lastname}
+        onChange={(e) => setLastname(e.target.value)}
       />
       <input
         type="text"
@@ -267,7 +284,9 @@ const Home: React.FC<{ authState: AuthState }> = ({ authState }) => {
     <div>
       <h1>Welcome to Identoro User Management</h1>
       {authState.signedIn ? (
-        <p>You are signed in as {authState.username}</p>
+        <p>
+          You are signed in as {authState.username}. Your name is {authState.name}.
+        </p>
       ) : (
         <p>You are not signed in</p>
       )}
@@ -298,7 +317,7 @@ const Home: React.FC<{ authState: AuthState }> = ({ authState }) => {
 };
 
 const App: React.FC = () => {
-  const [authState, setAuthState] = useState<AuthState>({ username: '', signedIn: false });
+  const [authState, setAuthState] = useState<AuthState>({ username: '', signedIn: false, name: '' });
 
   useEffect(() => {
     // Check if the user is signed in by making a request to the server
@@ -306,13 +325,13 @@ const App: React.FC = () => {
       const userId = localStorage.getItem('userId');
       if (userId) {
         try {
-          const response = await fetch('/check-auth');
+          const response = await fetch('/me');
           const data: AuthResponse = await response.json();
           if (response.status === 200) {
-            setAuthState({ username: data.username, signedIn: true });
+            setAuthState({ username: data.username, signedIn: true, name: data.name });
           }
         } catch (error) {
-          setAuthState({ username: '', signedIn: false });
+          setAuthState({ username: '', signedIn: false, name: '' });
         }
       }
     };

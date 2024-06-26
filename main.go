@@ -6,7 +6,6 @@ import (
     "encoding/json"
     "flag"
     "fmt"
-    "html/template"
     "io/ioutil"
     "log"
     "net/http"
@@ -18,6 +17,7 @@ import (
     "regexp"
     "runtime"
     "strconv"
+    "strings"
     "sync"
     "syscall"
     "time"
@@ -37,9 +37,8 @@ import (
 var (
     db                     Database
     store                  *sessions.CookieStore
-    tmpl                   = template.Must(template.ParseGlob("templates/*.html"))
     config                 *Config
-    version                = "1.0.0"
+    version                = "2"
     dbAvailable            = false
     loginMaxPerHour        = 15
     loginLock              sync.Mutex
@@ -48,24 +47,31 @@ var (
     userNameOrID           string
     groupNameOrID          string
     hashKey                []byte
-    mySigningKey           = []byte("mysecretkey") // Use a secure key in a real application
+    mySigningKey           []byte
 )
 
 type Config struct {
-    DbType             string
-    ConnStr            string
-    SecretKey          string
-    EmailSender        string
-    EmailPassword      string
-    SmtpHost           string
-    SmtpPort           int
-    WebServerAddress   string
-    EmailReplyTo       string
-    RecaptchaSiteKey   string
-    RecaptchaSecretKey string
-    User               string
-    Group              string
-    HashKey            string
+    DbType                     string
+    ConnStr                    string
+    SecretKey                  string
+    EmailSender                string
+    EmailPassword              string
+    SmtpHost                   string
+    SmtpPort                   int
+    WebServerAddress           string
+    EmailReplyTo               string
+    RecaptchaSiteKey           string
+    RecaptchaSecretKey         string
+    UseRecaptcha               bool
+    User                       string
+    Group                      string
+    HashKey                    string
+    RequireFirstAndLastName    bool
+    UseJWTAuth                 bool
+    JWTSecret                  string
+    JWTExpirationHours         int
+    RefreshTokenSecret         string
+    RefreshTokenExpirationHours int
 }
 
 type User struct {
@@ -73,15 +79,19 @@ type User struct {
     Username            string
     Password            string
     Email               string
+    Firstname           string
+    Lastname            string
     Verified            bool
     SigninCount         int
     UnsuccessfulSignins int
     CreatedAt           time.Time
+    RefreshToken        string
+    Extensions          string // JSON field for extensions
 }
 
 type Database interface {
     Open() error
-    CreateUser(username, password, email string) error
+    CreateUser(username, password, email, firstname, lastname string, extensions map[string]interface{}) error
     GetUserByUsername(username string) (User, error)
     GetUserByID(userID string) (User, error)
     UpdateUserVerification(email string) error
@@ -89,7 +99,12 @@ type Database interface {
     IncrementSigninCount(userID string) error
     IncrementUnsuccessfulSignins(username string) error
     ResetUnsuccessfulSignins(username string) error
+    StoreRefreshToken(userID, token string) error
+    GetRefreshToken(userID string) (string, error)
     TestConnection() error
+    CheckTables() error
+    CreateTables() error
+    LogEvent(userID, eventType string) error
 }
 
 type PostgresDB struct {
@@ -110,14 +125,86 @@ func (db *PostgresDB) Open() error {
     return err
 }
 
-func (db *PostgresDB) CreateUser(username, password, email string) error {
+func (db *PostgresDB) CheckTables() error {
+    var exists bool
+    query := `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'identoro_users')`
+    err := db.pool.QueryRow(context.Background(), query).Scan(&exists)
+    if err != nil {
+        return err
+    }
+    if !exists {
+        return fmt.Errorf("identoro_users table does not exist. Run the application with the --createtables flag to create the required tables.")
+    }
+
+    query = `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'identoro_message_queue')`
+    err = db.pool.QueryRow(context.Background(), query).Scan(&exists)
+    if err != nil {
+        return err
+    }
+    if !exists {
+        return fmt.Errorf("identoro_message_queue table does not exist. Run the application with the --createtables flag to create the required tables.")
+    }
+
+    return nil
+}
+
+func (db *PostgresDB) CreateTables() error {
+    createUsersTable := `
+    CREATE TABLE IF NOT EXISTS identoro_users (
+        user_id UUID PRIMARY KEY,
+        username VARCHAR(50) NOT NULL,
+        password VARCHAR(100) NOT NULL,
+        email VARCHAR(100) NOT NULL,
+        firstname VARCHAR(50),
+        lastname VARCHAR(50),
+        verified BOOLEAN NOT NULL DEFAULT FALSE,
+        signin_count INTEGER NOT NULL DEFAULT 0,
+        unsuccessful_signins INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        refresh_token TEXT,
+        extensions JSONB
+    );`
+    _, err := db.pool.Exec(context.Background(), createUsersTable)
+    if err != nil {
+        return err
+    }
+
+    createMessageQueueTable := `
+    CREATE TABLE IF NOT EXISTS identoro_message_queue (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        user_id UUID,
+        event_type TEXT NOT NULL,
+        processed BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );`
+    _, err = db.pool.Exec(context.Background(), createMessageQueueTable)
+    return err
+}
+
+func (db *PostgresDB) CreateUser(username, password, email, firstname, lastname string, extensions map[string]interface{}) error {
     if !dbAvailable {
         return fmt.Errorf("database not available")
     }
+
+    if len(firstname) > 50 {
+        return fmt.Errorf("firstname must be no more than 50 characters")
+    }
+
+    if len(lastname) > 50 {
+        return fmt.Errorf("lastname must be no more than 50 characters")
+    }
+
     userID := uuid.New().String()
-    query := `INSERT INTO identoro_users (user_id, username, password, email, verified, signin_count, unsuccessful_signins, created_at) VALUES ($1, $2, $3, $4, FALSE, 0, 0, CURRENT_TIMESTAMP)`
-    _, err := db.pool.Exec(context.Background(), query, userID, username, password, email)
-    return err
+    extensionsJSON, err := json.Marshal(extensions)
+    if err != nil {
+        return err
+    }
+    query := `INSERT INTO identoro_users (user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at, refresh_token, extensions) VALUES ($1, $2, $3, $4, $5, $6, FALSE, 0, 0, CURRENT_TIMESTAMP, '', $7)`
+    _, err = db.pool.Exec(context.Background(), query, userID, username, password, email, firstname, lastname, extensionsJSON)
+    if err != nil {
+        return err
+    }
+    return db.LogEvent(userID, "signup")
 }
 
 func (db *PostgresDB) GetUserByUsername(username string) (User, error) {
@@ -125,9 +212,9 @@ func (db *PostgresDB) GetUserByUsername(username string) (User, error) {
     if !dbAvailable {
         return user, fmt.Errorf("database not available")
     }
-    query := `SELECT user_id, username, password, email, verified, signin_count, unsuccessful_signins, created_at FROM identoro_users WHERE username = $1`
+    query := `SELECT user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at, refresh_token, extensions FROM identoro_users WHERE username = $1`
     row := db.pool.QueryRow(context.Background(), query, username)
-    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Verified, &user.SigninCount, &user.UnsuccessfulSignins, &user.CreatedAt)
+    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Firstname, &user.Lastname, &user.Verified, &user.SigninCount, &user.UnsuccessfulSignins, &user.CreatedAt, &user.RefreshToken, &user.Extensions)
     return user, err
 }
 
@@ -136,9 +223,9 @@ func (db *PostgresDB) GetUserByID(userID string) (User, error) {
     if !dbAvailable {
         return user, fmt.Errorf("database not available")
     }
-    query := `SELECT user_id, username, password, email, verified, signin_count, unsuccessful_signins, created_at FROM identoro_users WHERE user_id = $1`
+    query := `SELECT user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at, refresh_token, extensions FROM identoro_users WHERE user_id = $1`
     row := db.pool.QueryRow(context.Background(), query, userID)
-    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Verified, &user.SigninCount, &user.UnsuccessfulSignins, &user.CreatedAt)
+    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Firstname, &user.Lastname, &user.Verified, &user.SigninCount, &user.UnsuccessfulSignins, &user.CreatedAt, &user.RefreshToken, &user.Extensions)
     return user, err
 }
 
@@ -178,9 +265,29 @@ func (db *PostgresDB) ResetUnsuccessfulSignins(username string) error {
     return err
 }
 
+func (db *PostgresDB) StoreRefreshToken(userID, token string) error {
+    query := `UPDATE identoro_users SET refresh_token = $1 WHERE user_id = $2`
+    _, err := db.pool.Exec(context.Background(), query, token, userID)
+    return err
+}
+
+func (db *PostgresDB) GetRefreshToken(userID string) (string, error) {
+    var refreshToken string
+    query := `SELECT refresh_token FROM identoro_users WHERE user_id = $1`
+    row := db.pool.QueryRow(context.Background(), query, userID)
+    err := row.Scan(&refreshToken)
+    return refreshToken, err
+}
+
 func (db *PostgresDB) TestConnection() error {
     var result int
     return db.pool.QueryRow(context.Background(), "SELECT 1").Scan(&result)
+}
+
+func (db *PostgresDB) LogEvent(userID, eventType string) error {
+    query := `INSERT INTO identoro_message_queue (user_id, event_type, processed) VALUES ($1, $2, FALSE)`
+    _, err := db.pool.Exec(context.Background(), query, userID, eventType)
+    return err
 }
 
 type SQLiteDB struct {
@@ -191,29 +298,100 @@ type SQLiteDB struct {
 func (db *SQLiteDB) Open() error {
     var err error
     db.db, err = sql.Open("sqlite3", db.connStr)
+    if err != nil {
+        return err
+    }
+
+    return nil
+}
+
+func (db *SQLiteDB) CheckTables() error {
+    query := `SELECT name FROM sqlite_master WHERE type='table' AND name='identoro_users';`
+    var name string
+    err := db.db.QueryRow(query).Scan(&name)
+    if err == sql.ErrNoRows {
+        return fmt.Errorf("identoro_users table does not exist. Run the application with the --createtables flag to create the required tables.")
+    }
+    if err != nil {
+        return err
+    }
+
+    query = `SELECT name FROM sqlite_master WHERE type='table' AND name='identoro_message_queue';`
+    err = db.db.QueryRow(query).Scan(&name)
+    if err == sql.ErrNoRows {
+        return fmt.Errorf("identoro_message_queue table does not exist. Run the application with the --createtables flag to create the required tables.")
+    }
     return err
 }
 
-func (db *SQLiteDB) CreateUser(username, password, email string) error {
-    userID := uuid.New().String()
-    query := `INSERT INTO identoro_users (user_id, username, password, email, verified, signin_count, unsuccessful_signins, created_at) VALUES (?, ?, ?, ?, 0, 0, 0, CURRENT_TIMESTAMP)`
-    _, err := db.db.Exec(query, userID, username, password, email)
+func (db *SQLiteDB) CreateTables() error {
+    createUsersTable := `
+    CREATE TABLE IF NOT EXISTS identoro_users (
+        user_id TEXT PRIMARY KEY,
+        username TEXT NOT NULL,
+        password TEXT NOT NULL,
+        email TEXT NOT NULL,
+        firstname TEXT,
+        lastname TEXT,
+        verified BOOLEAN NOT NULL DEFAULT FALSE,
+        signin_count INTEGER NOT NULL DEFAULT 0,
+        unsuccessful_signins INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        refresh_token TEXT,
+        extensions TEXT
+    );`
+    _, err := db.db.Exec(createUsersTable)
+    if err != nil {
+        return err
+    }
+
+    createMessageQueueTable := `
+    CREATE TABLE IF NOT EXISTS identoro_message_queue (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(6)))),
+        user_id TEXT,
+        event_type TEXT NOT NULL,
+        processed BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );`
+    _, err = db.db.Exec(createMessageQueueTable)
     return err
+}
+
+func (db *SQLiteDB) CreateUser(username, password, email, firstname, lastname string, extensions map[string]interface{}) error {
+    if len(firstname) > 50 {
+        return fmt.Errorf("firstname must be no more than 50 characters")
+    }
+
+    if len(lastname) > 50 {
+        return fmt.Errorf("lastname must be no more than 50 characters")
+    }
+
+    userID := uuid.New().String()
+    extensionsJSON, err := json.Marshal(extensions)
+    if err != nil {
+        return err
+    }
+    query := `INSERT INTO identoro_users (user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at, refresh_token, extensions) VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, CURRENT_TIMESTAMP, '', ?)`
+    _, err = db.db.Exec(query, userID, username, password, email, firstname, lastname, extensionsJSON)
+    if err != nil {
+        return err
+    }
+    return db.LogEvent(userID, "signup")
 }
 
 func (db *SQLiteDB) GetUserByUsername(username string) (User, error) {
     var user User
-    query := `SELECT user_id, username, password, email, verified, signin_count, unsuccessful_signins, created_at FROM identoro_users WHERE username = ?`
+    query := `SELECT user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at, refresh_token, extensions FROM identoro_users WHERE username = ?`
     row := db.db.QueryRow(query, username)
-    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Verified, &user.SigninCount, &user.UnsuccessfulSignins, &user.CreatedAt)
+    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Firstname, &user.Lastname, &user.Verified, &user.SigninCount, &user.UnsuccessfulSignins, &user.CreatedAt, &user.RefreshToken, &user.Extensions)
     return user, err
 }
 
 func (db *SQLiteDB) GetUserByID(userID string) (User, error) {
     var user User
-    query := `SELECT user_id, username, password, email, verified, signin_count, unsuccessful_signins, created_at FROM identoro_users WHERE user_id = ?`
+    query := `SELECT user_id, username, password, email, firstname, lastname, verified, signin_count, unsuccessful_signins, created_at, refresh_token, extensions FROM identoro_users WHERE user_id = ?`
     row := db.db.QueryRow(query, userID)
-    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Verified, &user.SigninCount, &user.UnsuccessfulSignins, &user.CreatedAt)
+    err := row.Scan(&user.UserID, &user.Username, &user.Password, &user.Email, &user.Firstname, &user.Lastname, &user.Verified, &user.SigninCount, &user.UnsuccessfulSignins, &user.CreatedAt, &user.RefreshToken, &user.Extensions)
     return user, err
 }
 
@@ -247,8 +425,28 @@ func (db *SQLiteDB) ResetUnsuccessfulSignins(username string) error {
     return err
 }
 
+func (db *SQLiteDB) StoreRefreshToken(userID, token string) error {
+    query := `UPDATE identoro_users SET refresh_token = ? WHERE user_id = ?`
+    _, err := db.db.Exec(query, token, userID)
+    return err
+}
+
+func (db *SQLiteDB) GetRefreshToken(userID string) (string, error) {
+    var refreshToken string
+    query := `SELECT refresh_token FROM identoro_users WHERE user_id = ?`
+    row := db.db.QueryRow(query, userID)
+    err := row.Scan(&refreshToken)
+    return refreshToken, err
+}
+
 func (db *SQLiteDB) TestConnection() error {
     return db.db.Ping()
+}
+
+func (db *SQLiteDB) LogEvent(userID, eventType string) error {
+    query := `INSERT INTO identoro_message_queue (user_id, event_type, processed) VALUES (?, ?, 0)`
+    _, err := db.db.Exec(query, userID, eventType)
+    return err
 }
 
 func loadConfig() (*Config, error) {
@@ -262,21 +460,48 @@ func loadConfig() (*Config, error) {
         return nil, fmt.Errorf("invalid SMTP_PORT value in .env file")
     }
 
+    jwtExpirationHours, err := strconv.Atoi(os.Getenv("JWT_EXPIRATION_HOURS"))
+    if err != nil {
+        return nil, fmt.Errorf("invalid JWT_EXPIRATION_HOURS value in .env file")
+    }
+
+    refreshTokenExpirationHours, err := strconv.Atoi(os.Getenv("REFRESH_TOKEN_EXPIRATION_HOURS"))
+    if err != nil {
+        return nil, fmt.Errorf("invalid REFRESH_TOKEN_EXPIRATION_HOURS value in .env file")
+    }
+
+    useRecaptcha, err := strconv.ParseBool(os.Getenv("USE_RECAPTCHA"))
+    if err != nil {
+        useRecaptcha = false
+    }
+
+    useJWTAuth, err := strconv.ParseBool(os.Getenv("USE_JWT_AUTH"))
+    if err != nil {
+        useJWTAuth = false
+    }
+
     config := &Config{
-        DbType:             os.Getenv("DB_TYPE"),
-        ConnStr:            os.Getenv("DATABASE_URL"),
-        SecretKey:          os.Getenv("SECRET_KEY"),
-        EmailSender:        os.Getenv("EMAIL_SENDER"),
-        EmailPassword:      os.Getenv("EMAIL_PASSWORD"),
-        SmtpHost:           os.Getenv("SMTP_HOST"),
-        SmtpPort:           smtpPort,
-        WebServerAddress:   os.Getenv("WEB_SERVER_ADDRESS"),
-        EmailReplyTo:       os.Getenv("EMAIL_REPLY_TO"),
-        RecaptchaSiteKey:   os.Getenv("RECAPTCHA_SITE_KEY"),
-        RecaptchaSecretKey: os.Getenv("RECAPTCHA_SECRET_KEY"),
-        User:               os.Getenv("USER"),
-        Group:              os.Getenv("GROUP"),
-        HashKey:            os.Getenv("HASH_KEY"),
+        DbType:                     os.Getenv("DB_TYPE"),
+        ConnStr:                    os.Getenv("DATABASE_URL"),
+        SecretKey:                  os.Getenv("SECRET_KEY"),
+        EmailSender:                os.Getenv("EMAIL_SENDER"),
+        EmailPassword:              os.Getenv("EMAIL_PASSWORD"),
+        SmtpHost:                   os.Getenv("SMTP_HOST"),
+        SmtpPort:                   smtpPort,
+        WebServerAddress:           os.Getenv("WEB_SERVER_ADDRESS"),
+        EmailReplyTo:               os.Getenv("EMAIL_REPLY_TO"),
+        RecaptchaSiteKey:           os.Getenv("RECAPTCHA_SITE_KEY"),
+        RecaptchaSecretKey:         os.Getenv("RECAPTCHA_SECRET_KEY"),
+        UseRecaptcha:               useRecaptcha,
+        User:                       os.Getenv("USER"),
+        Group:                      os.Getenv("GROUP"),
+        HashKey:                    os.Getenv("HASH_KEY"),
+        RequireFirstAndLastName:    os.Getenv("REQUIRE_FIRST_AND_LAST_NAME") == "true",
+        UseJWTAuth:                 useJWTAuth,
+        JWTSecret:                  os.Getenv("JWT_SECRET"),
+        JWTExpirationHours:         jwtExpirationHours,
+        RefreshTokenSecret:         os.Getenv("REFRESH_TOKEN_SECRET"),
+        RefreshTokenExpirationHours: refreshTokenExpirationHours,
     }
 
     // Validate environment variables
@@ -286,11 +511,11 @@ func loadConfig() (*Config, error) {
     if !isValidURL(config.WebServerAddress) {
         return nil, fmt.Errorf("invalid WEB_SERVER_ADDRESS value in .env file")
     }
-    if !isValidEmail(config.EmailSender) {
-        return nil, fmt.Errorf("invalid EMAIL_SENDER value in .env file")
+    if valid, msg := isValidEmail(config.EmailSender); !valid {
+        return nil, fmt.Errorf("invalid EMAIL_SENDER value in .env file: %s", msg)
     }
-    if !isValidEmail(config.EmailReplyTo) {
-        return nil, fmt.Errorf("invalid EMAIL_REPLY_TO value in .env file")
+    if valid, msg := isValidEmail(config.EmailReplyTo); !valid {
+        return nil, fmt.Errorf("invalid EMAIL_REPLY_TO value in .env file: %s", msg)
     }
 
     return config, nil
@@ -302,6 +527,30 @@ func loadHashKey() ([]byte, error) {
         return nil, fmt.Errorf("HASH_KEY not set in environment variables")
     }
     return []byte(key), nil
+}
+
+func generateJWT(user User) (string, string, error) {
+    claims := jwt.MapClaims{
+        "user_id": user.UserID,
+        "exp":     time.Now().Add(time.Hour * time.Duration(config.JWTExpirationHours)).Unix(),
+    }
+    token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+    jwtToken, err := token.SignedString([]byte(config.JWTSecret))
+    if err != nil {
+        return "", "", err
+    }
+
+    refreshTokenClaims := jwt.MapClaims{
+        "user_id": user.UserID,
+        "exp":     time.Now().Add(time.Hour * time.Duration(config.RefreshTokenExpirationHours)).Unix(),
+    }
+    refreshToken := jwt.NewWithClaims(jwt.SigningMethodHS256, refreshTokenClaims)
+    refreshTokenString, err := refreshToken.SignedString([]byte(config.RefreshTokenSecret))
+    if err != nil {
+        return "", "", err
+    }
+
+    return jwtToken, refreshTokenString, nil
 }
 
 func printConfig(config *Config) {
@@ -318,47 +567,16 @@ func printConfig(config *Config) {
     fmt.Printf("  EMAIL_REPLY_TO: %s\n", config.EmailReplyTo)
     fmt.Printf("  RECAPTCHA_SITE_KEY: %s\n", config.RecaptchaSiteKey)
     fmt.Printf("  RECAPTCHA_SECRET_KEY: %s\n", maskString(config.RecaptchaSecretKey))
+    fmt.Printf("  USE_RECAPTCHA: %t\n", config.UseRecaptcha)
     fmt.Printf("  USER: %s\n", config.User)
     fmt.Printf("  GROUP: %s\n", config.Group)
     fmt.Printf("  HASH_KEY: %s\n", maskString(config.HashKey))
-
-    if config.DbType == "postgres" {
-        fmt.Println("\nExample SQL for creating an updatable view for PostgreSQL:")
-        fmt.Println(`CREATE VIEW identoro_users AS
-                      SELECT user_id, user_name AS username, passwd AS password, mail AS email, is_verified AS verified, signin_count, unsuccessful_signins, created_at
-                      FROM actual_users_table;
-
-                      CREATE RULE insert_identoro_users AS
-                      ON INSERT TO identoro_users
-                      DO INSTEAD
-                      INSERT INTO actual_users_table (user_name, passwd, mail, is_verified, signin_count, unsuccessful_signins, created_at)
-                      VALUES (NEW.username, NEW.password, NEW.email, NEW.verified, NEW.signin_count, NEW.unsuccessful_signins, NEW.created_at);
-
-                      CREATE RULE update_identoro_users AS
-                      ON UPDATE TO identoro_users
-                      DO INSTEAD
-                      UPDATE actual_users_table
-                      SET user_name = NEW.username,
-                          passwd = NEW.password,
-                          mail = NEW.email,
-                          is_verified = NEW.verified,
-                          signin_count = NEW.signin_count,
-                          unsuccessful_signins = NEW.unsuccessful_signins,
-                          created_at = NEW.created_at
-                      WHERE user_id = NEW.user_id;`)
-
-        fmt.Println("\nIf you do not already have a users table, you can use the following SQL to create it:")
-        fmt.Println(`CREATE TABLE identoro_users (
-                      user_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-                      user_name VARCHAR(50) NOT NULL,
-                      passwd VARCHAR(100) NOT NULL,
-                      mail VARCHAR(100) NOT NULL,
-                      is_verified BOOLEAN NOT NULL DEFAULT FALSE,
-                      signin_count INTEGER NOT NULL DEFAULT 0,
-                      unsuccessful_signins INTEGER NOT NULL DEFAULT 0,
-                      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-                  );`)
-    }
+    fmt.Printf("  REQUIRE_FIRST_AND_LAST_NAME: %t\n", config.RequireFirstAndLastName)
+    fmt.Printf("  USE_JWT_AUTH: %t\n", config.UseJWTAuth)
+    fmt.Printf("  JWT_SECRET: %s\n", maskString(config.JWTSecret))
+    fmt.Printf("  JWT_EXPIRATION_HOURS: %d\n", config.JWTExpirationHours)
+    fmt.Printf("  REFRESH_TOKEN_SECRET: %s\n", maskString(config.RefreshTokenSecret))
+    fmt.Printf("  REFRESH_TOKEN_EXPIRATION_HOURS: %d\n", config.RefreshTokenExpirationHours)
 }
 
 func maskString(s string) string {
@@ -386,23 +604,30 @@ func errorResponse(w http.ResponseWriter, statusCode int, message string) {
 }
 
 func displayHelp() {
-    fmt.Println("Usage: go run main.go [--help]")
+    fmt.Println("Usage: go run main.go [--help] [--createtables]")
     fmt.Println()
     fmt.Println("Environment Variables:")
-    fmt.Println("  DB_TYPE: The type of database to use (e.g., postgres, sqlite).")
-    fmt.Println("  DATABASE_URL: The connection string for the database.")
-    fmt.Println("  SECRET_KEY: The secret key for session management.")
-    fmt.Println("  EMAIL_SENDER: The email address to send emails from.")
-    fmt.Println("  EMAIL_PASSWORD: The password for the email sender.")
-    fmt.Println("  SMTP_HOST: The SMTP host for sending emails.")
-    fmt.Println("  SMTP_PORT: The SMTP port for sending emails.")
-    fmt.Println("  WEB_SERVER_ADDRESS: The address where the web server will be hosted.")
-    fmt.Println("  EMAIL_REPLY_TO: The reply-to email address for outgoing emails.")
-    fmt.Println("  RECAPTCHA_SITE_KEY: The site key for reCAPTCHA.")
-    fmt.Println("  RECAPTCHA_SECRET_KEY: The secret key for reCAPTCHA.")
-    fmt.Println("  USER: The user name or ID for dropping privileges.")
-    fmt.Println("  GROUP: The group name or ID for dropping privileges.")
-    fmt.Println("  HASH_KEY: The secret hash key for generating secure tokens.")
+    fmt.Println("  DB_TYPE: The type of database to use. Valid values are 'postgres' and 'sqlite'. (Default: none, required)")
+    fmt.Println("  DATABASE_URL: The connection string for the database. (Default: none, required)")
+    fmt.Println("  SECRET_KEY: The secret key for session management. (Default: none, required)")
+    fmt.Println("  EMAIL_SENDER: The email address to send emails from. (Default: none, required)")
+    fmt.Println("  EMAIL_PASSWORD: The password for the email sender. (Default: none, required)")
+    fmt.Println("  SMTP_HOST: The SMTP host for sending emails. (Default: none, required)")
+    fmt.Println("  SMTP_PORT: The SMTP port for sending emails. Valid values are integers. (Default: none, required)")
+    fmt.Println("  WEB_SERVER_ADDRESS: The address where the web server will be hosted. (Default: none, required)")
+    fmt.Println("  EMAIL_REPLY_TO: The reply-to email address for outgoing emails. (Default: none, required)")
+    fmt.Println("  RECAPTCHA_SITE_KEY: The site key for reCAPTCHA. (Default: none, optional)")
+    fmt.Println("  RECAPTCHA_SECRET_KEY: The secret key for reCAPTCHA. (Default: none, optional)")
+    fmt.Println("  USE_RECAPTCHA: Whether to use reCAPTCHA. Valid values are 'true' or 'false'. (Default: false, optional)")
+    fmt.Println("  USER: The user name or ID for dropping privileges. (Default: none, optional)")
+    fmt.Println("  GROUP: The group name or ID for dropping privileges. (Default: none, optional)")
+    fmt.Println("  HASH_KEY: The secret hash key for generating secure tokens. (Default: none, required)")
+    fmt.Println("  REQUIRE_FIRST_AND_LAST_NAME: Whether firstname and lastname are required. Valid values are 'true' or 'false'. (Default: false, optional)")
+    fmt.Println("  USE_JWT_AUTH: Whether to use JWT authentication. Valid values are 'true' or 'false'. (Default: false, optional)")
+    fmt.Println("  JWT_SECRET: The secret key for signing JWTs. (Default: none, required if USE_JWT_AUTH is true)")
+    fmt.Println("  JWT_EXPIRATION_HOURS: The expiration time for JWTs in hours. Valid values are integers. (Default: 24, optional)")
+    fmt.Println("  REFRESH_TOKEN_SECRET: The secret key for signing refresh tokens. (Default: none, required if USE_JWT_AUTH is true)")
+    fmt.Println("  REFRESH_TOKEN_EXPIRATION_HOURS: The expiration time for refresh tokens in hours. Valid values are integers. (Default: 720, optional)")
     fmt.Println()
     fmt.Println("Example of creating a suitable hash key using Linux CLI commands:")
     fmt.Println("  dd if=/dev/urandom bs=32 count=1 | base64")
@@ -412,6 +637,7 @@ func displayHelp() {
 
 func main() {
     help := flag.Bool("help", false, "Display help information")
+    createTables := flag.Bool("createtables", false, "Create required tables")
     flag.Parse()
 
     if *help {
@@ -432,8 +658,7 @@ func main() {
     userNameOrID = config.User
     groupNameOrID = config.Group
 
-    jailSelf()
-
+    // Ensure the SQLite database startup operations complete before jailing the process
     switch config.DbType {
     case "postgres":
         db = &PostgresDB{connStr: config.ConnStr}
@@ -443,20 +668,32 @@ func main() {
         log.Fatal("Unsupported database type")
     }
 
-    // Retry connecting to the database in a separate goroutine
-    go func() {
-        for {
-            err := db.Open()
-            if err == nil {
-                log.Println("Connected to the database")
-                dbAvailable = true
-                return
-            }
-            log.Printf("Database connection failed: %v. Retrying in %d seconds...", err, 1)
-            dbAvailable = false
-            time.Sleep(1 * time.Second)
+    err = db.Open()
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    err = db.CheckTables()
+    if err == nil {
+        if *createTables {
+            log.Println("Tables already exist. No need to create them.")
+            os.Exit(1)
         }
-    }()
+    } else {
+        if *createTables {
+            err = db.CreateTables()
+            if err != nil {
+                log.Fatal(err)
+            }
+            log.Println("Tables created successfully")
+            os.Exit(0)
+        } else {
+            log.Fatal(err)
+        }
+    }
+    dbAvailable = true
+
+    jailSelf()
 
     store = sessions.NewCookieStore([]byte(config.SecretKey))
     store.Options = &sessions.Options{
@@ -475,6 +712,8 @@ func main() {
     http.Handle("/forgot", logRequest(csrfMiddleware(http.HandlerFunc(forgotHandler))))
     http.Handle("/reset", logRequest(csrfMiddleware(http.HandlerFunc(resetHandler))))
     http.Handle("/verify", logRequest(csrfMiddleware(http.HandlerFunc(verifyHandler))))
+    http.Handle("/me", logRequest(csrfMiddleware(http.HandlerFunc(meHandler))))
+    http.Handle("/refresh", logRequest(csrfMiddleware(http.HandlerFunc(refreshTokenHandler))))
 
     // Secure middleware
     secureMiddleware := secure.New(secure.Options{
@@ -527,7 +766,7 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
     }
     session, _ := store.Get(r, "session")
     username, ok := session.Values["username"].(string)
-    tmpl.ExecuteTemplate(w, "home.html", map[string]interface{}{
+    response := map[string]interface{}{
         "Username": username,
         "SignedIn": ok,
         "Endpoints": []string{
@@ -537,8 +776,11 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
             "/forgot",
             "/reset",
             "/verify",
+            "/me",
+            "/refresh",
         },
-    })
+    }
+    jsonResponse(w, http.StatusOK, "Home", response)
 }
 
 func signupHandler(w http.ResponseWriter, r *http.Request) {
@@ -546,38 +788,49 @@ func signupHandler(w http.ResponseWriter, r *http.Request) {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
-    if r.Method == http.MethodPost {
+    switch r.Method {
+    case http.MethodPost:
         username := r.FormValue("username")
         email := r.FormValue("email")
         password := r.FormValue("password")
+        firstname := r.FormValue("firstname")
+        lastname := r.FormValue("lastname")
         recaptchaResponse := r.FormValue("g-recaptcha-response")
 
-        if !isValidUsername(username) || !isValidEmail(email) || !isValidPassword(password) {
-            if r.Header.Get("Content-Type") == "application/json" {
-                jsonResponse(w, http.StatusBadRequest, "Invalid input", nil)
-            } else {
-                errorResponse(w, http.StatusBadRequest, "Invalid input")
-            }
+        if valid, msg := isValidUsername(username); !valid {
+            jsonResponse(w, http.StatusBadRequest, msg, nil)
+            return
+        }
+        if valid, msg := isValidEmail(email); !valid {
+            jsonResponse(w, http.StatusBadRequest, msg, nil)
+            return
+        }
+        if valid, msg := isValidPassword(password); !valid {
+            jsonResponse(w, http.StatusBadRequest, msg, nil)
+            return
+        }
+        if len(firstname) > 50 {
+            jsonResponse(w, http.StatusBadRequest, "Firstname must be no more than 50 characters", nil)
+            return
+        }
+        if len(lastname) > 50 {
+            jsonResponse(w, http.StatusBadRequest, "Lastname must be no more than 50 characters", nil)
+            return
+        }
+        if config.RequireFirstAndLastName && (firstname == "" || lastname == "") {
+            jsonResponse(w, http.StatusBadRequest, "Firstname and lastname are required", nil)
             return
         }
 
-        if !verifyRecaptcha(recaptchaResponse) {
-            if r.Header.Get("Content-Type") == "application/json" {
-                jsonResponse(w, http.StatusBadRequest, "Invalid reCAPTCHA", nil)
-            } else {
-                errorResponse(w, http.StatusBadRequest, "Invalid reCAPTCHA")
-            }
+        if config.UseRecaptcha && !verifyRecaptcha(recaptchaResponse) {
+            jsonResponse(w, http.StatusBadRequest, "Invalid reCAPTCHA", nil)
             return
         }
 
         hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-        err := db.CreateUser(username, string(hashedPassword), email)
+        err := db.CreateUser(username, string(hashedPassword), email, firstname, lastname, nil)
         if err != nil {
-            if r.Header.Get("Content-Type") == "application/json" {
-                jsonResponse(w, http.StatusBadRequest, "Username or email already exists", nil)
-            } else {
-                errorResponse(w, http.StatusBadRequest, "Username or email already exists")
-            }
+            jsonResponse(w, http.StatusBadRequest, "Username or email already exists", nil)
             return
         }
 
@@ -589,33 +842,19 @@ func signupHandler(w http.ResponseWriter, r *http.Request) {
 
         token, err := generateVerificationToken(user.UserID)
         if err != nil {
-            if r.Header.Get("Content-Type") == "application/json" {
-                jsonResponse(w, http.StatusInternalServerError, "Could not generate verification token", nil)
-            } else {
-                errorResponse(w, http.StatusInternalServerError, "Could not generate verification token")
-            }
+            jsonResponse(w, http.StatusInternalServerError, "Could not generate verification token", nil)
             return
         }
 
         err = sendVerificationEmail(email, token)
         if err != nil {
-            if r.Header.Get("Content-Type") == "application/json" {
-                jsonResponse(w, http.StatusInternalServerError, "Could not send verification email", nil)
-            } else {
-                errorResponse(w, http.StatusInternalServerError, "Could not send verification email")
-            }
+            jsonResponse(w, http.StatusInternalServerError, "Could not send verification email", nil)
             return
         }
 
-        if r.Header.Get("Content-Type") == "application/json" {
-            jsonResponse(w, http.StatusSeeOther, "Signup successful, please verify your email", nil)
-        } else {
-            http.Redirect(w, r, "/signin", http.StatusSeeOther)
-        }
-    } else {
-        tmpl.ExecuteTemplate(w, "signup.html", map[string]interface{}{
-            "RecaptchaSiteKey": config.RecaptchaSiteKey,
-        })
+        jsonResponse(w, http.StatusSeeOther, "Signup successful, please verify your email", nil)
+    default:
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
     }
 }
 
@@ -624,23 +863,22 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
-    if r.Method == http.MethodPost {
-        // Delay added to slow down automated signin attempts
+    switch r.Method {
+    case http.MethodPost:
         time.Sleep(2 * time.Second)
 
         username := r.FormValue("username")
         password := r.FormValue("password")
 
-        if !isValidUsername(username) || !isValidPassword(password) {
-            if (r.Header.Get("Content-Type") == "application/json") {
-                jsonResponse(w, http.StatusBadRequest, "Invalid input", nil)
-            } else {
-                errorResponse(w, http.StatusBadRequest, "Invalid input")
-            }
+        if valid, msg := isValidUsername(username); !valid {
+            jsonResponse(w, http.StatusBadRequest, msg, nil)
+            return
+        }
+        if valid, msg := isValidPassword(password); !valid {
+            jsonResponse(w, http.StatusBadRequest, msg, nil)
             return
         }
 
-        // Rate limiting by account (username)
         epochHour := time.Now().Unix() / 3600
         loginLock.Lock()
         if currentEpochHour != epochHour {
@@ -650,11 +888,7 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
         attempts := loginAttemptsByAccount[username]
         if attempts >= loginMaxPerHour {
             loginLock.Unlock()
-            if (r.Header.Get("Content-Type") == "application/json") {
-                jsonResponse(w, http.StatusTooManyRequests, "Too many login attempts", nil)
-            } else {
-                errorResponse(w, http.StatusTooManyRequests, "Too many login attempts")
-            }
+            jsonResponse(w, http.StatusTooManyRequests, "Too many login attempts", nil)
             return
         }
         loginAttemptsByAccount[username]++
@@ -663,53 +897,53 @@ func signinHandler(w http.ResponseWriter, r *http.Request) {
         user, err := db.GetUserByUsername(username)
         if err != nil {
             db.IncrementUnsuccessfulSignins(username)
-            if (r.Header.Get("Content-Type") == "application/json") {
-                jsonResponse(w, http.StatusUnauthorized, "Invalid credentials", nil)
-            } else {
-                errorResponse(w, http.StatusUnauthorized, "Invalid credentials")
-            }
+            db.LogEvent("", "failed_signin")
+            jsonResponse(w, http.StatusUnauthorized, "Invalid credentials", nil)
             return
         }
 
         if !user.Verified {
-            if (r.Header.Get("Content-Type") == "application/json") {
-                jsonResponse(w, http.StatusUnauthorized, "Account not verified", nil)
-            } else {
-                errorResponse(w, http.StatusUnauthorized, "Account not verified")
-            }
+            jsonResponse(w, http.StatusUnauthorized, "Account not verified", nil)
             return
         }
 
         if bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password)) != nil {
             db.IncrementUnsuccessfulSignins(username)
-            if (r.Header.Get("Content-Type") == "application/json") {
-                jsonResponse(w, http.StatusUnauthorized, "Invalid credentials", nil)
-            } else {
-                errorResponse(w, http.StatusUnauthorized, "Invalid credentials")
-            }
+            db.LogEvent(user.UserID, "failed_signin")
+            jsonResponse(w, http.StatusUnauthorized, "Invalid credentials", nil)
             return
         }
 
-        // Reset unsuccessful_signins
         db.ResetUnsuccessfulSignins(username)
-
-        // Increment signin_count
         err = db.IncrementSigninCount(user.UserID)
         if err != nil {
             log.Printf("Failed to increment signin count: %v", err)
         }
 
-        session, _ := store.Get(r, "session")
-        session.Values["username"] = username
-        session.Save(r, w)
+        db.LogEvent(user.UserID, "signin")
 
-        if (r.Header.Get("Content-Type") == "application/json") {
-            jsonResponse(w, http.StatusSeeOther, "Signin successful", nil)
+        if config.UseJWTAuth {
+            jwtToken, refreshToken, err := generateJWT(user)
+            if err != nil {
+                http.Error(w, "Could not generate token", http.StatusInternalServerError)
+                return
+            }
+
+            err = db.StoreRefreshToken(user.UserID, refreshToken)
+            if err != nil {
+                http.Error(w, "Could not store refresh token", http.StatusInternalServerError)
+                return
+            }
+
+            jsonResponse(w, http.StatusOK, "Signin successful", map[string]string{"token": jwtToken, "refresh_token": refreshToken})
         } else {
-            http.Redirect(w, r, "/", http.StatusSeeOther)
+            session, _ := store.Get(r, "session")
+            session.Values["username"] = username
+            session.Save(r, w)
+            jsonResponse(w, http.StatusSeeOther, "Signin successful", nil)
         }
-    } else {
-        tmpl.ExecuteTemplate(w, "signin.html", nil)
+    default:
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
     }
 }
 
@@ -717,11 +951,7 @@ func signoutHandler(w http.ResponseWriter, r *http.Request) {
     session, _ := store.Get(r, "session")
     delete(session.Values, "username")
     session.Save(r, w)
-    if (r.Header.Get("Content-Type") == "application/json") {
-        jsonResponse(w, http.StatusOK, "Signout successful", nil)
-    } else {
-        http.Redirect(w, r, "/", http.StatusSeeOther)
-    }
+    jsonResponse(w, http.StatusOK, "Signout successful", nil)
 }
 
 func forgotHandler(w http.ResponseWriter, r *http.Request) {
@@ -729,15 +959,12 @@ func forgotHandler(w http.ResponseWriter, r *http.Request) {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
-    if r.Method == http.MethodPost {
+    switch r.Method {
+    case http.MethodPost:
         email := r.FormValue("email")
 
-        if !isValidEmail(email) {
-            if (r.Header.Get("Content-Type") == "application/json") {
-                jsonResponse(w, http.StatusBadRequest, "Invalid email", nil)
-            } else {
-                errorResponse(w, http.StatusBadRequest, "Invalid email")
-            }
+        if valid, msg := isValidEmail(email); !valid {
+            jsonResponse(w, http.StatusBadRequest, msg, nil)
             return
         }
 
@@ -752,8 +979,8 @@ func forgotHandler(w http.ResponseWriter, r *http.Request) {
         sendEmail(email, "Reset your password", emailBody)
 
         jsonResponse(w, http.StatusSeeOther, "Password reset email sent", nil)
-    } else {
-        tmpl.ExecuteTemplate(w, "forgot.html", nil)
+    default:
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
     }
 }
 
@@ -762,16 +989,13 @@ func resetHandler(w http.ResponseWriter, r *http.Request) {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
-    if r.Method == http.MethodPost {
+    switch r.Method {
+    case http.MethodPost:
         token := r.FormValue("token")
         newPassword := r.FormValue("new_password")
 
-        if !isValidPassword(newPassword) {
-            if (r.Header.Get("Content-Type") == "application/json") {
-                jsonResponse(w, http.StatusBadRequest, "Invalid input", nil)
-            } else {
-                errorResponse(w, http.StatusBadRequest, "Invalid input")
-            }
+        if valid, msg := isValidPassword(newPassword); !valid {
+            jsonResponse(w, http.StatusBadRequest, msg, nil)
             return
         }
 
@@ -789,8 +1013,8 @@ func resetHandler(w http.ResponseWriter, r *http.Request) {
         }
 
         jsonResponse(w, http.StatusSeeOther, "Password reset successful", nil)
-    } else {
-        tmpl.ExecuteTemplate(w, "reset.html", nil)
+    default:
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
     }
 }
 
@@ -799,109 +1023,135 @@ func verifyHandler(w http.ResponseWriter, r *http.Request) {
         jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
         return
     }
-    token := r.URL.Query().Get("token") // Extracting the token from the query parameters
-    userID, err := validateVerificationToken(token) // Validating the token
-    if err != nil {
-        if (r.Header.Get("Content-Type") == "application/json") {
+    switch r.Method {
+    case http.MethodGet:
+        token := r.URL.Query().Get("token")
+        userID, err := validateVerificationToken(token)
+        if err != nil {
             jsonResponse(w, http.StatusBadRequest, "Invalid token", nil)
-        } else {
-            errorResponse(w, http.StatusBadRequest, "Invalid token")
+            return
         }
-        return
-    }
 
-    user, err := db.GetUserByID(userID) // Fetching the user by ID
-    if err != nil {
-        jsonResponse(w, http.StatusInternalServerError, "Could not retrieve user", nil)
-        return
-    }
+        user, err := db.GetUserByID(userID)
+        if err != nil {
+            jsonResponse(w, http.StatusInternalServerError, "Could not retrieve user", nil)
+            return
+        }
 
-    err = db.UpdateUserVerification(user.Email)
-    if err != nil {
-        if (r.Header.Get("Content-Type") == "application/json") {
+        err = db.UpdateUserVerification(user.Email)
+        if err != nil {
             jsonResponse(w, http.StatusBadRequest, "Verification failed", nil)
-        } else {
-            errorResponse(w, http.StatusBadRequest, "Verification failed")
+            return
         }
-        return
-    }
 
-    if (r.Header.Get("Content-Type") == "application/json") {
         jsonResponse(w, http.StatusSeeOther, "Account verified", nil)
-    } else {
-        http.Redirect(w, r, "/signin", http.StatusSeeOther)
+    default:
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
     }
 }
 
 func generateVerificationToken(userID string) (string, error) {
-    // Create a new token object, specifying signing method and claims
     token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
         "user_id": userID,
-        "exp":     time.Now().Add(15 * time.Minute).Unix(), // Token expiration time
+        "exp":     time.Now().Add(15 * time.Minute).Unix(),
     })
-
-    // Sign and get the complete encoded token as a string using the secret
-    tokenString, err := token.SignedString(mySigningKey)
-    if err != nil {
-        return "", err
-    }
-
-    return tokenString, nil
+    return token.SignedString([]byte(config.JWTSecret))
 }
 
 func validateVerificationToken(tokenString string) (string, error) {
     token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-        // Ensure the token method conforms to "SigningMethodHMAC"
         if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
             return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
         }
-        return mySigningKey, nil
+        return []byte(config.JWTSecret), nil
     })
-
     if err != nil {
         return "", err
     }
-
     if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
         return claims["user_id"].(string), nil
-    } else {
-        return "", fmt.Errorf("invalid token")
     }
+    return "", fmt.Errorf("invalid token")
 }
 
 func generateResetToken(email string) (string, error) {
-    // Create a new token object, specifying signing method and claims
     token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
         "email": email,
-        "exp":   time.Now().Add(15 * time.Minute).Unix(), // Token expiration time
+        "exp":   time.Now().Add(15 * time.Minute).Unix(),
     })
-
-    // Sign and get the complete encoded token as a string using the secret
-    tokenString, err := token.SignedString(mySigningKey)
-    if err != nil {
-        return "", err
-    }
-
-    return tokenString, nil
+    return token.SignedString([]byte(config.JWTSecret))
 }
 
 func validateResetToken(tokenString string) (string, error) {
     token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-        // Ensure the token method conforms to "SigningMethodHMAC"
         if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
             return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
         }
-        return mySigningKey, nil
+        return []byte(config.JWTSecret), nil
     })
-
     if err != nil {
         return "", err
     }
-
     if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
         return claims["email"].(string), nil
-    } else {
-        return "", fmt.Errorf("invalid token")
+    }
+    return "", fmt.Errorf("invalid token")
+}
+
+func refreshTokenHandler(w http.ResponseWriter, r *http.Request) {
+    if !dbAvailable {
+        jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
+        return
+    }
+    switch r.Method {
+    case http.MethodPost:
+        refreshToken := r.FormValue("refresh_token")
+        token, err := jwt.Parse(refreshToken, func(token *jwt.Token) (interface{}, error) {
+            if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+                return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+            }
+            return []byte(config.RefreshTokenSecret), nil
+        })
+
+        if err != nil || !token.Valid {
+            jsonResponse(w, http.StatusUnauthorized, "Invalid refresh token", nil)
+            return
+        }
+
+        claims, ok := token.Claims.(jwt.MapClaims)
+        if !ok || !token.Valid {
+            jsonResponse(w, http.StatusUnauthorized, "Invalid token claims", nil)
+            return
+        }
+
+        userID := claims["user_id"].(string)
+        storedRefreshToken, err := db.GetRefreshToken(userID)
+        if err != nil || storedRefreshToken != refreshToken {
+            jsonResponse(w, http.StatusUnauthorized, "Invalid refresh token", nil)
+            return
+        }
+
+        user, err := db.GetUserByID(userID)
+        if err != nil {
+            jsonResponse(w, http.StatusInternalServerError, "Could not retrieve user", nil)
+            return
+        }
+
+        newJwtToken, newRefreshToken, err := generateJWT(user)
+        if err != nil {
+            jsonResponse(w, http.StatusInternalServerError, "Could not generate new token", nil)
+            return
+        }
+
+        err = db.StoreRefreshToken(userID, newRefreshToken)
+        if err != nil {
+            jsonResponse(w, http.StatusInternalServerError, "Could not store new refresh token", nil)
+            return
+        }
+
+        jsonResponse(w, http.StatusOK, "Token refreshed", map[string]string{"token": newJwtToken, "refresh_token": newRefreshToken})
+    default:
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
     }
 }
 
@@ -924,18 +1174,27 @@ func sendVerificationEmail(to, token string) error {
     return sendEmail(to, "Verify your account", emailBody)
 }
 
-func isValidUsername(username string) bool {
+func isValidUsername(username string) (bool, string) {
     re := regexp.MustCompile(`^[a-zA-Z0-9_]{3,20}$`)
-    return re.MatchString(username)
+    if !re.MatchString(username) {
+        return false, "Username must be 3-20 characters long and contain only letters, numbers, and underscores"
+    }
+    return true, ""
 }
 
-func isValidEmail(email string) bool {
+func isValidEmail(email string) (bool, string) {
     re := regexp.MustCompile(`^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,4}$`)
-    return re.MatchString(email)
+    if !re.MatchString(email) {
+        return false, "Invalid email address"
+    }
+    return true, ""
 }
 
-func isValidPassword(password string) bool {
-    return len(password) >= 6
+func isValidPassword(password string) (bool, string) {
+    if len(password) < 6 {
+        return false, "Password must be at least 6 characters long"
+    }
+    return true, ""
 }
 
 func isValidURL(url string) bool {
@@ -944,7 +1203,6 @@ func isValidURL(url string) bool {
 }
 
 func verifyRecaptcha(response string) bool {
-    // This function verifies the reCAPTCHA response with Google
     recaptchaURL := "https://www.google.com/recaptcha/api/siteverify"
     form := url.Values{}
     form.Add("secret", config.RecaptchaSecretKey)
@@ -973,7 +1231,6 @@ func verifyRecaptcha(response string) bool {
     return ok && success
 }
 
-// isStaticallyLinked checks if the current binary is statically linked on Linux
 func isStaticallyLinked() bool {
     f, err := os.Open("/proc/self/exe")
     if err != nil {
@@ -987,7 +1244,6 @@ func isStaticallyLinked() bool {
         log.Fatalf("Failed to read /proc/self/exe: %v", err)
     }
 
-    // Look for the presence of the dynamic linker (e.g., /lib64/ld-linux-x86-64.so.2)
     dynamicLinkers := []string{
         "/lib64/ld-linux-x86-64.so.2",
         "/lib/ld-linux.so.2",
@@ -1001,10 +1257,6 @@ func isStaticallyLinked() bool {
 }
 
 func jailSelf() {
-    // This function creates a directory to chroot into which ensures that if the process is compromised there are no visible files.
-    // We can do this because the application is statically compiled so it needs access to nothing, not even libraries.
-    // The other reason to do this is in case the working directory that we started from contains a .env file.
-
     log.Println("Running on Linux")
     if runtime.GOOS != "linux" {
         log.Println("Skipping jailSelf: not running on Linux")
@@ -1026,7 +1278,6 @@ func jailSelf() {
     var uid, gid int
     var err error
 
-    // Lookup user ID
     if userID, err := strconv.Atoi(userNameOrID); err == nil {
         uid = userID
     } else {
@@ -1040,7 +1291,6 @@ func jailSelf() {
         }
     }
 
-    // Lookup group ID
     if groupID, err := strconv.Atoi(groupNameOrID); err == nil {
         gid = groupID
     } else {
@@ -1054,43 +1304,86 @@ func jailSelf() {
         }
     }
 
-    // Get the temporary directory path
     tempDir := os.TempDir()
-
-    // Define the path for the chroot jail in the temporary directory
     jailPath := filepath.Join(tempDir, "identorochroot")
 
-    // Remove existing directory if it exists
     if _, err := os.Stat(jailPath); err == nil {
         if err = os.RemoveAll(jailPath); err != nil {
             log.Fatalf("Failed to remove existing directory: %v", err)
         }
     }
 
-    // Create the new directory
     if err = os.Mkdir(jailPath, 0755); err != nil {
         log.Fatalf("Failed to create directory: %v", err)
     }
 
-    // Change the current working directory to the new directory
     if err = os.Chdir(jailPath); err != nil {
         log.Fatalf("Failed to change directory: %v", err)
     }
 
-    // Perform the chroot operation
     if err = syscall.Chroot("."); err != nil {
         log.Fatalf("Failed to chroot: %v", err)
     }
 
-    // Set the group ID
     if err = syscall.Setgid(gid); err != nil {
         log.Fatalf("Failed to set group ID: %v", err)
     }
 
-    // Set the user ID
     if err = syscall.Setuid(uid); err != nil {
         log.Fatalf("Failed to set user ID: %v", err)
     }
 
     log.Printf("Dropped privileges to user: %s and group: %s", userNameOrID, groupNameOrID)
+}
+
+func meHandler(w http.ResponseWriter, r *http.Request) {
+    if !dbAvailable {
+        jsonResponse(w, http.StatusServiceUnavailable, "Database not available", nil)
+        return
+    }
+    if config.UseJWTAuth {
+        tokenString := r.Header.Get("Authorization")
+        if tokenString == "" {
+            jsonResponse(w, http.StatusUnauthorized, "Authorization header is required", nil)
+            return
+        }
+
+        tokenString = strings.TrimPrefix(tokenString, "Bearer ")
+        token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+            if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+                return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+            }
+            return []byte(config.JWTSecret), nil
+        })
+
+        if err != nil || !token.Valid {
+            jsonResponse(w, http.StatusUnauthorized, "Invalid token", nil)
+            return
+        }
+
+        if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
+            userID := claims["user_id"].(string)
+            user, err := db.GetUserByID(userID)
+            if err != nil {
+                jsonResponse(w, http.StatusInternalServerError, "Could not retrieve user", nil)
+                return
+            }
+            jsonResponse(w, http.StatusOK, "User info", user)
+        } else {
+            jsonResponse(w, http.StatusUnauthorized, "Invalid token claims", nil)
+        }
+    } else {
+        session, _ := store.Get(r, "session")
+        username, ok := session.Values["username"].(string)
+        if !ok {
+            jsonResponse(w, http.StatusUnauthorized, "Not signed in", nil)
+            return
+        }
+        user, err := db.GetUserByUsername(username)
+        if err != nil {
+            jsonResponse(w, http.StatusInternalServerError, "Could not retrieve user", nil)
+            return
+        }
+        jsonResponse(w, http.StatusOK, "User info", user)
+    }
 }
