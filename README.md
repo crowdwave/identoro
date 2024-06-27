@@ -8,6 +8,9 @@ Imagine if you didn't have to build signup/signin/forgot password yet again! Run
 
 This is a single-purpose web server that supports user signup, signin, password reset, and account verification functionalities. It uses PostgreSQL (via `pgx` driver) or SQLite for data storage and includes rate limiting for login attempts per account.
 
+## Project status:
+
+In development, NOT ready for usage. There's still a fair way to go for this to be production ready.
 
 ## Features
 

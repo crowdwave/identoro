@@ -70,6 +70,7 @@ type Config struct {
     JWTExpirationHours         int
     RefreshTokenSecret         string
     RefreshTokenExpirationHours int
+    UseCSRF                    bool
 }
 
 type User struct {
@@ -478,6 +479,11 @@ func loadConfig() (*Config, error) {
         useJWTAuth = false
     }
 
+    useCSRF, err := strconv.ParseBool(os.Getenv("USE_CSRF"))
+    if err != nil {
+        useCSRF = true
+    }
+
     config := &Config{
         DbType:                     os.Getenv("DB_TYPE"),
         ConnStr:                    os.Getenv("DATABASE_URL"),
@@ -500,6 +506,7 @@ func loadConfig() (*Config, error) {
         JWTExpirationHours:         jwtExpirationHours,
         RefreshTokenSecret:         os.Getenv("REFRESH_TOKEN_SECRET"),
         RefreshTokenExpirationHours: refreshTokenExpirationHours,
+        UseCSRF:                    useCSRF,
     }
 
     // Validate environment variables
@@ -575,6 +582,7 @@ func printConfig(config *Config) {
     fmt.Printf("  JWT_EXPIRATION_HOURS: %d\n", config.JWTExpirationHours)
     fmt.Printf("  REFRESH_TOKEN_SECRET: %s\n", maskString(config.RefreshTokenSecret))
     fmt.Printf("  REFRESH_TOKEN_EXPIRATION_HOURS: %d\n", config.RefreshTokenExpirationHours)
+    fmt.Printf("  USE_CSRF: %t\n", config.UseCSRF)
 }
 
 func maskString(s string) string {
@@ -626,6 +634,7 @@ func displayHelp() {
     fmt.Println("  JWT_EXPIRATION_HOURS: The expiration time for JWTs in hours. Valid values are integers. (Default: 24, optional)")
     fmt.Println("  REFRESH_TOKEN_SECRET: The secret key for signing refresh tokens. (Default: none, required if USE_JWT_AUTH is true)")
     fmt.Println("  REFRESH_TOKEN_EXPIRATION_HOURS: The expiration time for refresh tokens in hours. Valid values are integers. (Default: 720, optional)")
+    fmt.Println("  USE_CSRF: Whether to use CSRF protection. Valid values are 'true' or 'false'. (Default: true, optional)")
     fmt.Println()
     fmt.Println("Example of creating a suitable hash key using Linux CLI commands:")
     fmt.Println("  dd if=/dev/urandom bs=32 count=1 | base64")
@@ -699,8 +708,13 @@ func main() {
     }
 
     csrfMiddleware := csrf.Protect(hashKey)
+    if !config.UseCSRF {
+        csrfMiddleware = func(handler http.Handler) http.Handler {
+            return handler
+        }
+    }
 
-    http.Handle("/", logRequest(csrfMiddleware(http.HandlerFunc(homeHandler))))
+    http.Handle("/home", logRequest(csrfMiddleware(http.HandlerFunc(homeHandler))))
     http.Handle("/signup", logRequest(csrfMiddleware(http.HandlerFunc(signupHandler))))
     http.Handle("/signin", logRequest(csrfMiddleware(http.HandlerFunc(signinHandler))))
     http.Handle("/signout", logRequest(csrfMiddleware(http.HandlerFunc(signoutHandler))))
