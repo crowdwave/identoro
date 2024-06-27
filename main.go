@@ -38,14 +38,12 @@ var (
     db                     Database
     store                  *sessions.CookieStore
     config                 *Config
-    version                = "2"
+    version                = "3"
     dbAvailable            = false
     loginMaxPerHour        = 15
     loginLock              sync.Mutex
     loginAttemptsByAccount = make(map[string]int)
     currentEpochHour       int64
-    userNameOrID           string
-    groupNameOrID          string
     hashKey                []byte
     mySigningKey           []byte
 )
@@ -63,8 +61,8 @@ type Config struct {
     RecaptchaSiteKey           string
     RecaptchaSecretKey         string
     UseRecaptcha               bool
-    User                       string
-    Group                      string
+    RunAsUserNameOrId          string
+    RunAsGroupNameOrId         string
     HashKey                    string
     RequireFirstAndLastName    bool
     UseJWTAuth                 bool
@@ -493,8 +491,8 @@ func loadConfig() (*Config, error) {
         RecaptchaSiteKey:           os.Getenv("RECAPTCHA_SITE_KEY"),
         RecaptchaSecretKey:         os.Getenv("RECAPTCHA_SECRET_KEY"),
         UseRecaptcha:               useRecaptcha,
-        User:                       os.Getenv("USER"),
-        Group:                      os.Getenv("GROUP"),
+        RunAsUserNameOrId:          os.Getenv("RUN_AS_USERNAME_OR_ID"),
+        RunAsGroupNameOrId:         os.Getenv("RUN_AS_GROUPNAME_OR_ID"),
         HashKey:                    os.Getenv("HASH_KEY"),
         RequireFirstAndLastName:    os.Getenv("REQUIRE_FIRST_AND_LAST_NAME") == "true",
         UseJWTAuth:                 useJWTAuth,
@@ -568,8 +566,8 @@ func printConfig(config *Config) {
     fmt.Printf("  RECAPTCHA_SITE_KEY: %s\n", config.RecaptchaSiteKey)
     fmt.Printf("  RECAPTCHA_SECRET_KEY: %s\n", maskString(config.RecaptchaSecretKey))
     fmt.Printf("  USE_RECAPTCHA: %t\n", config.UseRecaptcha)
-    fmt.Printf("  USER: %s\n", config.User)
-    fmt.Printf("  GROUP: %s\n", config.Group)
+    fmt.Printf("  RUN_AS_USERNAME_OR_ID: %s\n", config.RunAsUserNameOrId)
+    fmt.Printf("  RUN_AS_GROUPNAME_OR_ID: %s\n", config.RunAsGroupNameOrId)
     fmt.Printf("  HASH_KEY: %s\n", maskString(config.HashKey))
     fmt.Printf("  REQUIRE_FIRST_AND_LAST_NAME: %t\n", config.RequireFirstAndLastName)
     fmt.Printf("  USE_JWT_AUTH: %t\n", config.UseJWTAuth)
@@ -619,8 +617,8 @@ func displayHelp() {
     fmt.Println("  RECAPTCHA_SITE_KEY: The site key for reCAPTCHA. (Default: none, optional)")
     fmt.Println("  RECAPTCHA_SECRET_KEY: The secret key for reCAPTCHA. (Default: none, optional)")
     fmt.Println("  USE_RECAPTCHA: Whether to use reCAPTCHA. Valid values are 'true' or 'false'. (Default: false, optional)")
-    fmt.Println("  USER: The user name or ID for dropping privileges. (Default: none, optional)")
-    fmt.Println("  GROUP: The group name or ID for dropping privileges. (Default: none, optional)")
+    fmt.Println("  RUN_AS_USERNAME_OR_ID: The user name or ID for dropping privileges. (Default: none, optional)")
+    fmt.Println("  RUN_AS_GROUPNAME_OR_ID: The group name or ID for dropping privileges. (Default: none, optional)")
     fmt.Println("  HASH_KEY: The secret hash key for generating secure tokens. (Default: none, required)")
     fmt.Println("  REQUIRE_FIRST_AND_LAST_NAME: Whether firstname and lastname are required. Valid values are 'true' or 'false'. (Default: false, optional)")
     fmt.Println("  USE_JWT_AUTH: Whether to use JWT authentication. Valid values are 'true' or 'false'. (Default: false, optional)")
@@ -654,9 +652,6 @@ func main() {
     if err != nil {
         log.Fatal(err)
     }
-
-    userNameOrID = config.User
-    groupNameOrID = config.Group
 
     // Ensure the SQLite database startup operations complete before jailing the process
     switch config.DbType {
@@ -1271,17 +1266,21 @@ func jailSelf() {
         log.Fatal("This program must be run as root!")
     }
 
-    if userNameOrID == "" || groupNameOrID == "" {
-        log.Fatal("User and group must be provided!")
+    if config.RunAsUserNameOrId == "" || config.RunAsGroupNameOrId == "" {
+        log.Fatal("RUN_AS_USERNAME_OR_ID and RUN_AS_GROUPNAME_OR_ID must be provided!")
     }
 
     var uid, gid int
     var err error
 
-    if userID, err := strconv.Atoi(userNameOrID); err == nil {
+    // Check and convert user ID
+    if userID, err := strconv.Atoi(config.RunAsUserNameOrId); err == nil {
+        if userID == 0 {
+            log.Fatal("User ID cannot be root (0)!")
+        }
         uid = userID
     } else {
-        usr, err := user.Lookup(userNameOrID)
+        usr, err := user.Lookup(config.RunAsUserNameOrId)
         if err != nil {
             log.Fatalf("Failed to lookup user: %v", err)
         }
@@ -1289,18 +1288,28 @@ func jailSelf() {
         if err != nil {
             log.Fatalf("Failed to convert user ID: %v", err)
         }
+        if uid == 0 {
+            log.Fatal("User ID cannot be root (0)!")
+        }
     }
 
-    if groupID, err := strconv.Atoi(groupNameOrID); err == nil {
+    // Check and convert group ID
+    if groupID, err := strconv.Atoi(config.RunAsGroupNameOrId); err == nil {
+        if groupID == 0 {
+            log.Fatal("Group ID cannot be root (0)!")
+        }
         gid = groupID
     } else {
-        grp, err := user.LookupGroup(groupNameOrID)
+        grp, err := user.LookupGroup(config.RunAsGroupNameOrId)
         if err != nil {
             log.Fatalf("Failed to lookup group: %v", err)
         }
         gid, err = strconv.Atoi(grp.Gid)
         if err != nil {
             log.Fatalf("Failed to convert group ID: %v", err)
+        }
+        if gid == 0 {
+            log.Fatal("Group ID cannot be root (0)!")
         }
     }
 
@@ -1333,7 +1342,7 @@ func jailSelf() {
         log.Fatalf("Failed to set user ID: %v", err)
     }
 
-    log.Printf("Dropped privileges to user: %s and group: %s", userNameOrID, groupNameOrID)
+    log.Printf("Dropped privileges to user: %s and group: %s", config.RunAsUserNameOrId, config.RunAsGroupNameOrId)
 }
 
 func meHandler(w http.ResponseWriter, r *http.Request) {
