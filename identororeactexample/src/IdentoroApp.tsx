@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { BrowserRouter as Router, Route, Switch, Link, Redirect } from 'react-router-dom'; 
+import { BrowserRouter as Router, Route, Routes, Link, Navigate } from 'react-router-dom'; // Updated imports
 
 interface AuthState {
   username: string;
   signedIn: boolean;
+  name: string; // Added missing 'name' field
 }
 
 interface SigninResponse {
@@ -13,7 +14,7 @@ interface SigninResponse {
 
 interface AuthResponse {
   username: string;
-  name: string; // Assuming name is returned from the server
+  name: string;
 }
 
 const Signup: React.FC = () => {
@@ -113,7 +114,7 @@ const Signin: React.FC<{ setAuthState: React.Dispatch<React.SetStateAction<AuthS
       const data: SigninResponse = await response.json();
       setMessage(data.message);
       if (response.status === 200 || response.status === 303) {
-        setAuthState({ username, signedIn: true });
+        setAuthState({ username, signedIn: true, name: '' }); // Assume name is empty initially
         localStorage.setItem('userId', data.userId);
       }
     } catch (error) {
@@ -152,7 +153,7 @@ const Signout: React.FC<{ setAuthState: React.Dispatch<React.SetStateAction<Auth
       });
       const data = await response.json();
       setMessage(data.message);
-      setAuthState({ username: '', signedIn: false });
+      setAuthState({ username: '', signedIn: false, name: '' });
       localStorage.removeItem('userId');
     } catch (error) {
       setMessage('Error signing out');
@@ -316,7 +317,7 @@ const Home: React.FC<{ authState: AuthState }> = ({ authState }) => {
   );
 };
 
-const App: React.FC = () => {
+export const IdentoroRoutes: React.FC = () => {
   const [authState, setAuthState] = useState<AuthState>({ username: '', signedIn: false, name: '' });
 
   useEffect(() => {
@@ -340,33 +341,15 @@ const App: React.FC = () => {
   }, []);
 
   return (
-    <Router>
-      <Switch>
-        <Route path="/signup">
-          <Signup />
-        </Route>
-        <Route path="/signin">
-          <Signin setAuthState={setAuthState} />
-        </Route>
-        <Route path="/signout">
-          <Signout setAuthState={setAuthState} />
-        </Route>
-        <Route path="/forgot-password">
-          <ForgotPassword />
-        </Route>
-        <Route path="/reset-password">
-          <ResetPassword />
-        </Route>
-        <Route path="/verify-account">
-          <VerifyAccount />
-        </Route>
-        <Route path="/">
-          <Home authState={authState} />
-        </Route>
-        <Redirect to="/" />
-      </Switch>
-    </Router>
+    <Routes>
+        <Route path="/signup" element={<Signup />} />
+        <Route path="/signin" element={<Signin setAuthState={setAuthState} />} />
+        <Route path="/signout" element={<Signout setAuthState={setAuthState} />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
+        <Route path="/verify-account" element={<VerifyAccount />} />
+        <Route path="/" element={<Home authState={authState} />} />
+    </Routes>
   );
 };
 
-export default App;

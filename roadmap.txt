@@ -3,4 +3,3 @@ json field for future expansion
 HTML UI
 React UI
 VueJS UI
-event log table
